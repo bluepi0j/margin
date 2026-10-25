@@ -71,14 +71,17 @@ cask "margin" do
   end
 
   auto_updates true
-  depends_on macos: ">= :sonoma"
+  depends_on macos: :sonoma
 
   app "Margin.app"
 
   # Margin is not notarized (no Apple Developer ID), so macOS would refuse to
-  # open it the first time; Homebrew installs are trusted, so lift that.
-  postflight do
-    system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{appdir}/Margin.app"]
+  # open it the first time; lift that for the copy Homebrew put in
+  # /Applications. With a custom --appdir this step is skipped and macOS asks
+  # once instead.
+  postflight_steps do
+    run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "Margin.app"], chdir: "/Applications",
+                          must_succeed: false, print_stderr: false
   end
 
   zap trash: [
