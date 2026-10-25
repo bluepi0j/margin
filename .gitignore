@@ -1,0 +1,11 @@
+.build/
+dist/
+*.xcodeproj/
+DerivedData/
+.DS_Store
+WebEditor/node_modules/
+WebEditor/test/.build/
+.swiftpm/
+# Local planning notes, not published
+SPEC.md
+DEV_PLAN.md
