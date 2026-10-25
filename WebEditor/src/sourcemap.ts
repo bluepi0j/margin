@@ -151,12 +151,25 @@ export function textareaOffsetY(area: HTMLTextAreaElement, offset: number): numb
 
 /** The offset of the line start shown `y` pixels below the textarea's top. */
 export function textareaOffsetAtY(area: HTMLTextAreaElement, y: number): number {
+  // One span per line, laid out once, then a binary search on their tops.
+  const mirror = mirrorOf(area)
+  const lines = area.value.split('\n')
+  const spans = lines.map((line, i) => {
+    const span = document.createElement('span')
+    span.textContent = i < lines.length - 1 ? line + '\n' : line
+    mirror.appendChild(span)
+    return span
+  })
+  document.body.appendChild(mirror)
   let lo = 0
-  let hi = area.value.length
+  let hi = spans.length - 1
   while (lo < hi) {
     const mid = Math.ceil((lo + hi) / 2)
-    if (textareaOffsetY(area, mid) <= y) lo = mid
+    if (spans[mid].offsetTop <= y) lo = mid
     else hi = mid - 1
   }
-  return area.value.lastIndexOf('\n', lo - 1) + 1
+  mirror.remove()
+  let offset = 0
+  for (let i = 0; i < lo; i++) offset += lines[i].length + 1
+  return offset
 }

@@ -278,22 +278,26 @@ function placeInMarkdown(): Place {
 
 /** Puts the caret at `place` in the view now showing and scrolls its line to the top. */
 function goToPlace(place: Place) {
+  let offsets: number[] = []
   if (sourceMode) {
     sourceArea.setSelectionRange(place.caret, place.caret)
   } else {
     const doc = editor.state.doc
-    const offsets = blockOffsets(editor, doc, place.markdown)
+    offsets = blockOffsets(editor, doc, place.markdown)
     const caret = docPosition(doc, offsets, place.markdown, place.caret)
     editor.view.dispatch(editor.state.tr.setSelection(Selection.near(doc.resolve(caret))))
   }
   // After show()'s own scroll restore, which runs on the next frame.
+  const mode = sourceMode
+  const target = editor.state.doc
   requestAnimationFrame(() => requestAnimationFrame(() => {
+    // Toggled again, or the document changed, in the meantime: leave it be.
+    if (sourceMode !== mode || (!mode && editor.state.doc !== target)) return
     let y: number
     if (sourceMode) {
       y = sourceArea.getBoundingClientRect().top + textareaOffsetY(sourceArea, place.top)
     } else {
-      const doc = editor.state.doc
-      const pos = docPosition(doc, blockOffsets(editor, doc, place.markdown), place.markdown, place.top)
+      const pos = docPosition(editor.state.doc, offsets, place.markdown, place.top)
       y = editor.view.coordsAtPos(pos).top
     }
     window.scrollBy(0, y - TOP_MARGIN)
