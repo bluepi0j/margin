@@ -9,6 +9,8 @@ let package = Package(
         // Vendored from nodes-app/swift-markdown-engine 0.15.0 with a small patch
         // (rendered code blocks, for Mermaid); see Vendor/README.md.
         .package(path: "Vendor/swift-markdown-engine"),
+        // In-app updates: checks the release feed, downloads, installs, relaunches.
+        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.10.0"),
         // Mermaid diagrams drawn natively (no web view) for the native editor.
         .package(url: "https://github.com/lukilabs/beautiful-mermaid-swift", from: "1.0.0"),
     ],
@@ -24,14 +26,17 @@ let package = Package(
                 .product(name: "MarkdownEngineCodeBlocks", package: "swift-markdown-engine"),
                 .product(name: "MarkdownEngineLatex", package: "swift-markdown-engine"),
                 .product(name: "BeautifulMermaid", package: "beautiful-mermaid-swift"),
+                .product(name: "Sparkle", package: "Sparkle"),
             ],
             path: "Sources/Margin",
             resources: [.copy("Resources/Editor")],
             // SwiftPM records the deployment target as the SDK version, which makes
             // macOS draw the app in compatibility mode (no Liquid Glass). Record the
             // real SDK so AppKit uses the current design; still runs on macOS 14.
+            // Sparkle.framework is copied into Contents/Frameworks (scripts/build-app.sh).
             linkerSettings: [.unsafeFlags(["-Xlinker", "-platform_version", "-Xlinker", "macos",
-                                           "-Xlinker", "14.0", "-Xlinker", "26.0"])]
+                                           "-Xlinker", "14.0", "-Xlinker", "26.0",
+                                           "-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"])]
         ),
         .testTarget(name: "MarginCoreTests", dependencies: ["MarginCore"], path: "Tests/MarginCoreTests"),
     ]

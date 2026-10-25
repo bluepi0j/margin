@@ -1,5 +1,6 @@
 import AppKit
 import MarginCore
+import Sparkle
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -10,6 +11,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     static var shared: AppDelegate { NSApp.delegate as! AppDelegate }
 
     private(set) var controllers: [WorkspaceWindowController] = []
+    /// Updates (Sparkle): checks the feed in Info.plist once a day, then
+    /// downloads, installs and relaunches when the user agrees.
+    let updaterController = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
     private var settingsWindow: NSWindow?
     private var launched = false
     /// URLs handed to us before launch finished (Finder double-click).
@@ -51,6 +55,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             newWindow(nil)
         }
         NSApp.activate()
+    }
+
+    @objc func checkForUpdates(_ sender: Any?) {
+        updaterController.checkForUpdates(sender)
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {

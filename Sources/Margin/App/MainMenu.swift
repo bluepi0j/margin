@@ -24,6 +24,7 @@ enum MainMenu {
     private static func appMenu() -> NSMenu {
         let m = NSMenu(title: "Margin")
         m.addItem(item("About Margin", #selector(NSApplication.orderFrontStandardAboutPanel(_:))))
+        m.addItem(item("Check for Updates…", #selector(AppDelegate.checkForUpdates(_:))))
         m.addItem(.separator())
         m.addItem(item("Settings…", #selector(AppDelegate.showSettings(_:)), ","))
         m.addItem(.separator())

@@ -5,12 +5,13 @@ import SwiftUI
 struct SettingsView: View {
     @Bindable var prefs: Preferences
     @State private var pane: Pane = .appearance
+    @State private var autoUpdate = AppDelegate.shared.updaterController.updater.automaticallyChecksForUpdates
 
     enum Pane: String, CaseIterable, Identifiable {
-        case appearance, editor, files
+        case appearance, editor, general
         var id: String { rawValue }
-        var title: String { ["appearance": "Appearance", "editor": "Editor", "files": "Files"][rawValue]! }
-        var symbol: String { ["appearance": "paintpalette", "editor": "character.cursor.ibeam", "files": "folder"][rawValue]! }
+        var title: String { ["appearance": "Appearance", "editor": "Editor", "general": "General"][rawValue]! }
+        var symbol: String { ["appearance": "paintpalette", "editor": "character.cursor.ibeam", "general": "gearshape"][rawValue]! }
     }
 
     var body: some View {
@@ -29,7 +30,7 @@ struct SettingsView: View {
                 switch pane {
                 case .appearance: appearance
                 case .editor: editor
-                case .files: files
+                case .general: general
                 }
             }
             .padding(24)
@@ -101,11 +102,23 @@ struct SettingsView: View {
                   isOn: $prefs.autosave)
     }
 
-    @ViewBuilder private var files: some View {
+    @ViewBuilder private var general: some View {
         ToggleRow(title: "Reopen windows and tabs on launch", detail: "Pick up exactly where you left off.",
                   isOn: $prefs.restoreSession)
         ToggleRow(title: "Show all files in the sidebar", detail: "Not just Markdown — images and other files too.",
                   isOn: $prefs.showAllFiles)
+        ToggleRow(title: "Check for updates automatically",
+                  detail: "Once a day, asks GitHub whether a newer Margin is out. Nothing else leaves your Mac.",
+                  isOn: $autoUpdate)
+            .onChange(of: autoUpdate) { _, on in AppDelegate.shared.updaterController.updater.automaticallyChecksForUpdates = on }
+        HStack {
+            Text("Margin \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "")")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+            Spacer()
+            Button("Check Now") { AppDelegate.shared.checkForUpdates(nil) }
+                .controlSize(.small)
+        }
     }
 }
 

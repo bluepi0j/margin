@@ -1,0 +1,88 @@
+name: Release
+
+# Publishes a new version: builds a universal app, signs the update for
+# Sparkle, creates the GitHub release (zip + appcast.xml) and updates the
+# Homebrew cask in bluepi0j/homebrew-tap.
+#
+# Run it from Actions → Release → Run workflow. Only the repository owner can.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version, e.g. 1.2.0"
+        required: true
+      notes:
+        description: "Release notes (leave empty to generate them from the commits)"
+        required: false
+
+concurrency: release
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    if: github.actor == github.repository_owner
+    runs-on: macos-26
+    env:
+      VERSION: ${{ inputs.version }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the version
+        run: |
+          echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo "::error::Version must look like 1.2.0"; exit 1; }
+          if git ls-remote --exit-code --tags origin "refs/tags/v$VERSION" >/dev/null; then
+            echo "::error::v$VERSION has already been released"; exit 1
+          fi
+
+      - name: Release notes
+        env:
+          NOTES: ${{ inputs.notes }}
+        run: |
+          if [ -n "$NOTES" ]; then
+            printf '%s\n' "$NOTES" > "$RUNNER_TEMP/notes.md"
+          else
+            gh api "repos/$GITHUB_REPOSITORY/releases/generate-notes" -f tag_name="v$VERSION" -q .body > "$RUNNER_TEMP/notes.md"
+          fi
+          cat "$RUNNER_TEMP/notes.md"
+
+      - name: Build, sign and package
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          printf '%s' "$SPARKLE_PRIVATE_KEY" > "$RUNNER_TEMP/sparkle.key"
+          SPARKLE_KEY_FILE="$RUNNER_TEMP/sparkle.key" scripts/release.sh "$VERSION" "${{ github.run_number }}" "$RUNNER_TEMP/notes.md"
+          rm -f "$RUNNER_TEMP/sparkle.key"
+
+      - name: Commit the version and tag it
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "Release $VERSION"
+          git tag "v$VERSION"
+          git push origin HEAD:main "v$VERSION"
+
+      - name: Publish the GitHub release
+        run: |
+          gh release create "v$VERSION" dist/release/Margin-$VERSION.zip dist/release/appcast.xml \
+            --title "Margin $VERSION" --notes-file "$RUNNER_TEMP/notes.md"
+
+      - name: Update the Homebrew cask
+        env:
+          TAP_DEPLOY_KEY: ${{ secrets.TAP_DEPLOY_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$TAP_DEPLOY_KEY" > ~/.ssh/tap_key && chmod 600 ~/.ssh/tap_key
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/tap_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+          git clone git@github.com:bluepi0j/homebrew-tap.git "$RUNNER_TEMP/tap"
+          mkdir -p "$RUNNER_TEMP/tap/Casks"
+          cp dist/release/margin.rb "$RUNNER_TEMP/tap/Casks/margin.rb"
+          cd "$RUNNER_TEMP/tap"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/margin.rb
+          git commit -m "margin $VERSION"
+          git push origin main
+          rm -f ~/.ssh/tap_key

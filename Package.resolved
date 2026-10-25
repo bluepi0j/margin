@@ -1,5 +1,5 @@
 {
-  "originHash" : "0c8f655c25f68e36019b879684a4f252c2da977bb3e782ba68c35d6ee82be69a",
+  "originHash" : "b11c9db0384f4aef0e97e3300520503e54887fb33b29cc96c73e44d83039faca",
   "pins" : [
     {
       "identity" : "beautiful-mermaid-swift",
@@ -17,6 +17,15 @@
       "state" : {
         "revision" : "32f8042e3509a4819f00ff9cd46e829ec2b26da0",
         "version" : "1.0.2"
+      }
+    },
+    {
+      "identity" : "sparkle",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/sparkle-project/Sparkle",
+      "state" : {
+        "revision" : "eef1a539a373c1f1a320624b1130fc5de7b2e100",
+        "version" : "2.10.0"
       }
     },
     {

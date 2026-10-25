@@ -1,0 +1,32 @@
+name: CI
+
+# Builds the app and runs every test on each push and pull request.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: WebEditor/package-lock.json
+
+      - name: Install web editor dependencies
+        run: npm ci
+        working-directory: WebEditor
+
+      - name: Test (Swift + web editor)
+        run: scripts/test.sh
+
+      - name: Build the app
+        run: scripts/build-app.sh
