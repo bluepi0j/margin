@@ -53,10 +53,14 @@ struct TabBarView: View {
 }
 
 extension TabBarView {
-    /// Markdown is the default, so its extension is noise (like the sidebar).
+    /// Markdown is the default, so its extension is noise — the sidebar strips
+    /// the same set (MarginCore/MarkdownFiles.swift), and tabs should match.
     static func trimmed(_ title: String) -> String {
-        for ext in [".md", ".markdown"] where title.lowercased().hasSuffix(ext) && title.count > ext.count {
-            return String(title.dropLast(ext.count))
+        for ext in MarkdownFiles.extensions.sorted(by: { $0.count > $1.count }) {
+            let dotted = "." + ext
+            if title.lowercased().hasSuffix(dotted) && title.count > dotted.count {
+                return String(title.dropLast(dotted.count))
+            }
         }
         return title
     }

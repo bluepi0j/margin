@@ -37,6 +37,10 @@ final class Exporter {
     private func render(_ markdown: String, documentURL: URL?) async -> (title: String, body: String)? {
         await waitUntilReady()
         webView.call("settings", ["s": ["fontSize": 15, "width": 720, "accent": Preferences.controlAccentHex, "rail": false]])
+        // The page keeps an already-registered document as-is, so drop the
+        // previous export first — otherwise exporting tab B after tab A
+        // renders A again.
+        webView.call("close", ["id": "export"])
         webView.call("open", ["id": "export", "markdown": markdown, "base": LocalFileSchemeHandler.baseURL(for: documentURL), "activate": true])
         // Let KaTeX and Mermaid finish drawing.
         try? await Task.sleep(for: .milliseconds(markdown.contains("```mermaid") ? 900 : 250))

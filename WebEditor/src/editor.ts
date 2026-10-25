@@ -160,6 +160,16 @@ export const MERMAID_SAMPLE = 'graph LR\n  A[Idea] --> B[Draft]\n  B --> C{Good?
 // Code block with a language label and a copy button
 
 const MarginCodeBlock = CodeBlockLowlight.extend({
+  // TipTap's own serializer always writes ```; a line of ``` inside the code
+  // would then close the block early when the file is read back. Emit a
+  // fence one longer than any backtick run in the content (CommonMark).
+  renderMarkdown: (node: any, h: any) => {
+    const language = node.attrs?.language || ''
+    const code = node.content ? h.renderChildren(node.content) : ''
+    const longest = Math.max(0, ...[...code.matchAll(/`+/g)].map(m => m[0].length))
+    const fence = '`'.repeat(Math.max(3, longest + 1))
+    return [fence + language, code, fence].join('\n')
+  },
   addNodeView() {
     return ({ node, editor, getPos }) => {
       let current: PMNode = node

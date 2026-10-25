@@ -73,13 +73,44 @@ export function serializeMarkdown(editor: Editor, doc: JSONContent): string {
     rest = content.slice(1)
   }
   let body = editor.markdown!.serialize({ ...doc, content: rest })
-  body = body
-    .replace(/&nbsp;|&#160;/g, ' ')
-    // TipTap pads tables with blank lines on both sides; one is enough.
-    .replace(/\n{3,}/g, '\n\n')
-    .replace(/^\n+/, '')
-    .replace(/\s+$/, '')
+  body = tidy(body)
   return prefix + body + '\n'
+}
+
+/**
+ * Cleanup of the serialized body, line by line so it never reaches inside a
+ * code fence: TipTap emits `&nbsp;` for non-breaking spaces and pads tables
+ * with extra blank lines, but collapsing blank lines or replacing entities
+ * inside a code block would change the file's content (Python's two blank
+ * lines between defs, or literal `&nbsp;` in an HTML snippet). Fences are
+ * tracked the CommonMark way: a fence of N characters is only closed by a
+ * line of at least N of the same character, so ``` inside a ```` block
+ * doesn't confuse the count.
+ */
+function tidy(body: string): string {
+  const out: string[] = []
+  let fence = '' // the opening run ('```', '~~~~'…); '' when outside code
+  let blanks = 0
+  for (const line of body.split('\n')) {
+    const m = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line)
+    if (fence) {
+      if (m && m[1][0] === fence[0] && m[1].length >= fence.length && m[2].trim() === '') fence = ''
+    } else if (m) {
+      fence = m[1]
+    }
+    if (fence) {
+      blanks = 0
+      out.push(line)
+      continue
+    }
+    if (line === '') {
+      if (++blanks > 1) continue // two or more blank lines collapse to one
+    } else {
+      blanks = 0
+    }
+    out.push(line.replace(/&nbsp;|&#160;/g, ' '))
+  }
+  return out.join('\n').replace(/^\n+/, '').replace(/\s+$/, '')
 }
 
 // ---------------------------------------------------------------------------

@@ -230,6 +230,10 @@ final class EditorWebView: WKWebView {
             let p = convert(sender.draggingLocation, from: nil)
             let point = CGPoint(x: p.x, y: isFlipped ? p.y : bounds.height - p.y)
             if onDropFiles?(urls, point) == true { return true }
+            // A file the app doesn't take (a PDF, an image while in source
+            // mode): swallow the drag. Handing it to WebKit could navigate to
+            // the file, replacing the editor page.
+            return true
         }
         return super.performDragOperation(sender)
     }

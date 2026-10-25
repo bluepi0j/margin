@@ -14,6 +14,8 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
     private var splitController: NSSplitViewController!
     private var sidebarItem: NSSplitViewItem!
     private var watcher: FileWatcher?
+    /// The block-based observer for sidebar resizes; removed on close.
+    private var splitObserver: NSObjectProtocol?
     private var treeReloadScheduled = false
     private var closeConfirmed = false
 
@@ -77,7 +79,7 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
         splitController.addSplitViewItem(contentItem)
         splitController.splitView.dividerStyle = .thin
         splitController.splitView.autosaveName = "MarginSplit"
-        NotificationCenter.default.addObserver(forName: NSSplitView.didResizeSubviewsNotification,
+        splitObserver = NotificationCenter.default.addObserver(forName: NSSplitView.didResizeSubviewsNotification,
                                                object: splitController.splitView, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.syncSidebarState() }
         }
@@ -1089,6 +1091,10 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         watcher = nil
+        if let splitObserver {
+            NotificationCenter.default.removeObserver(splitObserver)
+            self.splitObserver = nil
+        }
         NotificationCenter.default.removeObserver(self)
         onClose?(self)
     }

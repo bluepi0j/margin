@@ -13,6 +13,21 @@ test('ordered list', () => same('1. one\n2. two\n'))
 test('task list', () => same('- [ ] todo\n- [x] done\n'))
 test('blockquote', () => same('> quote\n'))
 test('code block keeps content verbatim', () => same('```js\nconst a = `x` * 2 // <b>&\n```\n'))
+test('code block keeps its blank lines (Python PEP 8) and entities', () => {
+  same('```python\ndef a():\n    pass\n\n\ndef b():\n    pass\n```\n')
+  same('```html\n<p>hello&nbsp;world</p>\n```\n')
+})
+test('a code block containing a fence is saved with a longer fence', () => {
+  const out = roundTrip(editor, '~~~\ncode with ``` inside\nmore\n~~~\n')
+  assert.equal(out, '````\ncode with ``` inside\nmore\n````\n')
+  assert.equal(roundTrip(editor, out), out)
+  same('````\nnested\n```\nstill code\n````\n')
+})
+test('blank lines outside code fences still collapse', () => {
+  assert.equal(roundTrip(editor, 'a\n\n\n\nb\n'), 'a\n\nb\n')
+  // Table padding doesn't leave stray blank lines around the table.
+  assert.doesNotMatch(roundTrip(editor, '| a |\n| --- |\n| 1 |\n'), /\n\n/)
+})
 test('horizontal rule', () => same('a\n\n---\n\nb\n'))
 test('inline and block math', () => same('Inline $E=mc^2$ math.\n\n$$\n\\int_0^1 x\\,dx\n$$\n'))
 test('image', () => same('![alt](images/a.png)\n'))
