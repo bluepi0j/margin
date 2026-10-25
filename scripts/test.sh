@@ -7,4 +7,4 @@ if [ -z "${DEVELOPER_DIR:-}" ] && ! xcodebuild -version >/dev/null 2>&1; then
     [ -n "$XCODE" ] && export DEVELOPER_DIR="$XCODE/Contents/Developer"
 fi
 cd "$ROOT" && swift test
-cd "$ROOT/WebEditor" && node build.mjs --test && node --test test/
+cd "$ROOT/WebEditor" && node build.mjs --test && node --test 'test/*.test.mjs'
