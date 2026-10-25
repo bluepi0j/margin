@@ -7,7 +7,7 @@
 import 'katex/dist/katex.min.css'
 import './styles.css'
 
-import { EditorState } from '@tiptap/pm/state'
+import { EditorState, Selection } from '@tiptap/pm/state'
 import type { Node as PMNode } from '@tiptap/pm/model'
 import { createDocument, type Editor } from '@tiptap/core'
 import { createEditor, runCommand, selectionState, setImageBase } from './editor'
@@ -16,6 +16,7 @@ import { FindBar } from './find'
 import { closePopover } from './popover'
 import { BubbleBar } from './bubble'
 import { OutlineRail } from './rail'
+import { blockOffsets, docPosition, sourceOffset, textareaOffsetAtY, textareaOffsetY } from './sourcemap'
 
 interface Doc {
   id: string
@@ -255,6 +256,50 @@ function show(doc: Doc | undefined) {
   requestAnimationFrame(() => (document.scrollingElement!.scrollTop = top))
 }
 
+interface Place { markdown: string; caret: number; top: number }
+
+const TOP_MARGIN = 24
+
+/** The caret and the first visible line of the current view, as offsets into its Markdown. */
+function placeInMarkdown(): Place {
+  if (sourceMode) {
+    const areaTop = sourceArea.getBoundingClientRect().top
+    return { markdown: sourceArea.value, caret: sourceArea.selectionStart,
+             top: textareaOffsetAtY(sourceArea, Math.max(0, TOP_MARGIN - areaTop)) }
+  }
+  const markdown = serializeMarkdown(editor, editor.getJSON())
+  const doc = editor.state.doc
+  const offsets = blockOffsets(editor, doc, markdown)
+  const box = host.getBoundingClientRect()
+  const atTop = editor.view.posAtCoords({ left: box.left + 2, top: Math.max(box.top + 2, TOP_MARGIN) })
+  return { markdown, caret: sourceOffset(doc, offsets, markdown, editor.state.selection.from),
+           top: sourceOffset(doc, offsets, markdown, atTop?.pos ?? 0) }
+}
+
+/** Puts the caret at `place` in the view now showing and scrolls its line to the top. */
+function goToPlace(place: Place) {
+  if (sourceMode) {
+    sourceArea.setSelectionRange(place.caret, place.caret)
+  } else {
+    const doc = editor.state.doc
+    const offsets = blockOffsets(editor, doc, place.markdown)
+    const caret = docPosition(doc, offsets, place.markdown, place.caret)
+    editor.view.dispatch(editor.state.tr.setSelection(Selection.near(doc.resolve(caret))))
+  }
+  // After show()'s own scroll restore, which runs on the next frame.
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    let y: number
+    if (sourceMode) {
+      y = sourceArea.getBoundingClientRect().top + textareaOffsetY(sourceArea, place.top)
+    } else {
+      const doc = editor.state.doc
+      const pos = docPosition(doc, blockOffsets(editor, doc, place.markdown), place.markdown, place.top)
+      y = editor.view.coordsAtPos(pos).top
+    }
+    window.scrollBy(0, y - TOP_MARGIN)
+  }))
+}
+
 function autosizeSource() {
   sourceArea.style.height = 'auto'
   sourceArea.style.height = `${sourceArea.scrollHeight}px`
@@ -423,9 +468,12 @@ const api = {
 
   setSourceMode(on: boolean) {
     if (on === sourceMode) return
-    stash()
     const doc = active()
-    if (on && doc) doc.source = doc.sourceBase = currentMarkdown(doc)
+    // Where you are — the caret and the first line on screen — as Markdown
+    // offsets, so the other view can open at the same place.
+    const place = doc ? placeInMarkdown() : null
+    stash()
+    if (on && doc) doc.source = doc.sourceBase = place?.markdown ?? currentMarkdown(doc)
     sourceMode = on
     document.body.classList.toggle('source-mode', on)
     findBar.close()
@@ -433,8 +481,9 @@ const api = {
       activeId = null
       show(doc)
     }
-    if (on) sourceArea.focus()
-    else editor.commands.focus()
+    if (on) sourceArea.focus({ preventScroll: true })
+    else editor.view.focus()
+    if (place) goToPlace(place)
     scheduleState()
   },
 
