@@ -7,7 +7,7 @@ import SwiftUI
 
 /// The native editor: swift-markdown-engine's TextKit 2 view, which styles
 /// Markdown live and hides the syntax except where the caret is. The text is
-/// the file, byte for byte, so nothing is ever re-formatted on save.
+/// the Markdown as typed, so saving does not reformat its syntax.
 @MainActor
 final class NativeDocumentEditor: DocumentEditor {
     var onEvent: ((EditorEvent) -> Void)?

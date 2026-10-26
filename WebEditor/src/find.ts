@@ -17,7 +17,9 @@ const key = new PluginKey<FindState>('find')
 function search(doc: PMNode, query: string) {
   const matches: { from: number; to: number }[] = []
   if (!query) return matches
-  const needle = query.toLocaleLowerCase()
+  // Match against the original string: lowercasing can change its length
+  // (e.g. İ -> i + combining dot), invalidating ProseMirror positions.
+  const pattern = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'giu')
   doc.descendants((node, pos) => {
     if (!node.isTextblock) return true
     // Collect the textblock's text with a position map (inline atoms count as one char).
@@ -34,11 +36,9 @@ function search(doc: PMNode, query: string) {
         positions.push(pos + 1 + offset)
       }
     })
-    const hay = text.toLocaleLowerCase()
-    let i = hay.indexOf(needle)
-    while (i !== -1 && needle.length > 0) {
-      matches.push({ from: positions[i], to: positions[i + needle.length - 1] + 1 })
-      i = hay.indexOf(needle, i + needle.length)
+    for (const match of text.matchAll(pattern)) {
+      const i = match.index!
+      matches.push({ from: positions[i], to: positions[i + match[0].length - 1] + 1 })
     }
     return false
   })

@@ -235,7 +235,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        saveSession()
         Task {
             for c in controllers {
                 guard await c.prepareToClose(quitting: true) else {
@@ -243,6 +242,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     return
                 }
             }
+            // Closing may rename new files or save drafts under a new path.
+            saveSession()
             sender.reply(toApplicationShouldTerminate: true)
         }
         return .terminateLater

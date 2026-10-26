@@ -17,6 +17,18 @@ test('code block keeps its blank lines (Python PEP 8) and entities', () => {
   same('```python\ndef a():\n    pass\n\n\ndef b():\n    pass\n```\n')
   same('```html\n<p>hello&nbsp;world</p>\n```\n')
 })
+test('entities inside code in quotes and lists remain literal', () => {
+  same('> ```html\n> &nbsp; &#160;\n> ```\n')
+  same('- item\n  ```html\n  &nbsp; &#160;\n  ```\n')
+})
+test('empty paragraphs are not saved as &nbsp;', () => {
+  const doc = { type: 'doc', content: [
+    { type: 'paragraph', content: [{ type: 'text', text: 'a' }] },
+    { type: 'paragraph' }, { type: 'paragraph' }, { type: 'paragraph' },
+    { type: 'paragraph', content: [{ type: 'text', text: 'b' }] },
+  ] }
+  assert.equal(core.serializeMarkdown(editor, doc), 'a\n\nb\n')
+})
 test('a code block containing a fence is saved with a longer fence', () => {
   const out = roundTrip(editor, '~~~\ncode with ``` inside\nmore\n~~~\n')
   assert.equal(out, '````\ncode with ``` inside\nmore\n````\n')
@@ -59,7 +71,7 @@ test('literal text with escapes survives a second round trip', () => {
   assert.equal(roundTrip(editor, once), once)
   assert.equal(once, 'a \\*b\\* c \\`d\\`\n')
 })
-test('CRLF input is normalized', () => same('# A\n\nb\n') || assert.equal(roundTrip(editor, '# A\r\n\r\nb\r\n'), '# A\n\nb\n'))
+test('CRLF input is normalized', () => assert.equal(roundTrip(editor, '# A\r\n\r\nb\r\n'), '# A\n\nb\n'))
 test('empty document', () => assert.equal(roundTrip(editor, ''), '\n'))
 test('Chinese text', () => same('# 标题\n\n这是**中文**内容，包含 `代码` 和 [链接](https://example.com)。\n'))
 

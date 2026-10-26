@@ -24,8 +24,9 @@ public enum TextFile {
         if data.prefix(512).contains(0), !(data.starts(with: [0xFF, 0xFE]) || data.starts(with: [0xFE, 0xFF])) {
             throw Failure.notText(url)
         }
+        let hasUTF16BOM = data.starts(with: [0xFF, 0xFE]) || data.starts(with: [0xFE, 0xFF])
         var text = String(data: data, encoding: .utf8)
-            ?? String(data: data, encoding: .utf16)
+            ?? (hasUTF16BOM ? String(data: data, encoding: .utf16) : nil)
             ?? String(data: data, encoding: .isoLatin1)
         if text?.hasPrefix("\u{FEFF}") == true { text?.removeFirst() }
         guard let text else { throw Failure.notText(url) }
@@ -35,8 +36,11 @@ public enum TextFile {
     /// Writes atomically (temp file + rename) so a crash never leaves half a file.
     @discardableResult
     public static func write(_ text: String, to url: URL) throws -> Date? {
-        try Data(text.utf8).write(to: url, options: .atomic)
-        return try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+        // Atomic replacement of a symlink replaces the link itself. Save to
+        // its target so editing a linked document preserves both locations.
+        let destination = url.resolvingSymlinksInPath()
+        try Data(text.utf8).write(to: destination, options: .atomic)
+        return try? destination.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
     }
 
     /// A name like "Untitled.md", "Untitled 2.md" that doesn't exist in `folder`.

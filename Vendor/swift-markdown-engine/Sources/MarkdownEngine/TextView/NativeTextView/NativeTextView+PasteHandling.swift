@@ -30,12 +30,11 @@ extension NativeTextView {
         // copy→paste round-trips byte-exact. The derived HTML flavor is lossy
         // (e.g. the HTML renderer drops the `|UUID` of a wiki link), so this
         // must win over the HTML branch below.
-        if let ownMarkdown = pasteboard.string(forType: MarkdownPasteboardWriter.markdownType) {
-            let sanitized = sanitizePastedText(ownMarkdown)
-            if !sanitized.isEmpty {
-                insertPreservingBlockquote(sanitized)
-                return
-            }
+        // [Margin patch] Whitespace is Markdown content: trimming loses code
+        // indentation and collapsing blank lines changes pasted code examples.
+        if let ownMarkdown = pasteboard.string(forType: MarkdownPasteboardWriter.markdownType), !ownMarkdown.isEmpty {
+            insertPreservingBlockquote(ownMarkdown)
+            return
         }
 
         // Rich paste: convert an HTML flavor (Claude, browsers, Word, Notion)
@@ -47,28 +46,21 @@ extension NativeTextView {
         // markdown, so we let it fall through to the clean plain-text flavor.
         if let html = pasteboard.string(forType: .html),
            Self.htmlHasBlockStructure(html),
-           let markdown = HTMLToMarkdownConverter.markdown(fromHTML: html) {
-            let sanitized = sanitizePastedText(markdown)
-            if !sanitized.isEmpty {
-                insertPreservingBlockquote(sanitized)
-                return
-            }
+           case let markdown = (HTMLToMarkdownConverter.markdown(fromHTML: html) ?? "").trimmingCharacters(in: .newlines),
+           !markdown.isEmpty {
+            // [Margin patch] Converted HTML is synthetic; drop only its surrounding newlines.
+            insertPreservingBlockquote(markdown)
+            return
         }
 
-        if let pasted = pasteboard.string(forType: .string) {
-            let sanitized = sanitizePastedText(pasted)
-            if !sanitized.isEmpty {
-                insertPreservingBlockquote(sanitized)
-                return
-            }
+        if let pasted = pasteboard.string(forType: .string), !pasted.isEmpty {
+            insertPreservingBlockquote(pasted)
+            return
         }
 
-        if let fileText = textFromPastedFileURL(pasteboard: pasteboard) {
-            let sanitized = sanitizePastedText(fileText)
-            if !sanitized.isEmpty {
-                insertPreservingBlockquote(sanitized)
-                return
-            }
+        if let fileText = textFromPastedFileURL(pasteboard: pasteboard), !fileText.isEmpty {
+            insertPreservingBlockquote(fileText)
+            return
         }
 
         pasteAsPlainText(sender)
@@ -131,20 +123,6 @@ extension NativeTextView {
             if let s = try? String(contentsOf: url) { return s }
         }
         return nil
-    }
-
-    private func sanitizePastedText(_ s: String) -> String {
-        var out = s
-        // Normalize pasted bullet glyphs (• ‣ ◦ ·) at line start to Markdown '- ' lists.
-        if let bulletRegex = try? NSRegularExpression(pattern: #"^([ \t]*)[•‣◦·][ \t]+"#, options: [.anchorsMatchLines]) {
-            let nsRange = NSRange(location: 0, length: (out as NSString).length)
-            out = bulletRegex.stringByReplacingMatches(in: out, range: nsRange, withTemplate: "$1- ")
-        }
-        if let regex = try? NSRegularExpression(pattern: "\\n{3,}") {
-            let nsRange = NSRange(location: 0, length: (out as NSString).length)
-            out = regex.stringByReplacingMatches(in: out, range: nsRange, withTemplate: "\n\n")
-        }
-        return out.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     override func validateUserInterfaceItem(_ item: any NSValidatedUserInterfaceItem) -> Bool {

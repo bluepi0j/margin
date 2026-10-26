@@ -4,7 +4,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import './setup.mjs'
 
-document.body.innerHTML = `<div id="page"><div id="editor"></div><textarea id="source" hidden></textarea></div><div id="empty"></div>`
+document.body.innerHTML = `<div id="page"><div id="editor"></div><textarea id="source" hidden></textarea></div><div id="empty"></div><div id="word-count"></div>`
 const messages = []
 window.webkit = { messageHandlers: { margin: { postMessage: m => messages.push(m) } } }
 globalThis.CSS ??= { escape: s => s }
@@ -20,6 +20,38 @@ function typeText(text) {
 
 test('page reports ready', () => {
   assert.ok(messages.some(m => m.type === 'ready'))
+})
+
+test('heading level zero turns a heading into a paragraph', () => {
+  margin.open('paragraph', '## Heading\n', '', true)
+  margin.command('heading', { level: 0 })
+  assert.equal(margin.getMarkdown('paragraph'), 'Heading\n')
+  margin.close('paragraph')
+})
+
+test('export waits for the diagram renderer before returning HTML', async () => {
+  window.MarginMermaid = { render: () => '<svg data-test="rendered"></svg>' }
+  margin.open('export-diagram', '# Export\n\n```mermaid\ngraph LR\nA --> B\n```\n', '', true)
+  const result = await margin.exportHTML()
+  assert.equal(result.title, 'Export')
+  assert.match(result.body, /data-test="rendered"/)
+  assert.doesNotMatch(result.body, /code-header|<pre/)
+  margin.close('export-diagram')
+  delete window.MarginMermaid
+})
+
+test('find and replace keeps positions after Unicode case expansion', () => {
+  margin.open('unicode-find', 'İstanbul next NEXT\n', '', true)
+  margin.find('replace')
+  const input = document.querySelector('.find-input')
+  input.value = 'next'
+  input.dispatchEvent(new window.Event('input'))
+  document.querySelector('.replace-input').value = 'done'
+  document.querySelector('[data-act="replace-all"]').click()
+  assert.equal(margin.getMarkdown('unicode-find'), 'İstanbul done done\n')
+  margin.find('open')
+  document.querySelector('[data-act="close"]').click()
+  margin.close('unicode-find')
 })
 
 test('each tab keeps its own document', () => {

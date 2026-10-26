@@ -28,5 +28,10 @@ jobs:
       - name: Test (Swift + web editor)
         run: scripts/test.sh
 
+      - name: Check the bundled editor matches its source
+        run: |
+          scripts/build-editor.sh
+          git diff --exit-code -- Sources/Margin/Resources/Editor
+
       - name: Build the app
         run: scripts/build-app.sh

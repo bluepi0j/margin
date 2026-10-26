@@ -170,7 +170,7 @@ public enum MarkdownEditing {
         case .quote: s.flags.insert("blockquote")
         case .paragraph: break
         }
-        if isInsideFence(ns, at: caret) { s.flags.insert("codeBlock") }
+        if codeFence(containing: caret, in: text) != nil { s.flags.insert("codeBlock") }
         // Inline marks: an odd number of markers before the caret on this line.
         let col = caret - lineR.location
         let left = (line as NSString).substring(to: min(col, (line as NSString).length))
@@ -183,15 +183,6 @@ public enum MarkdownEditing {
         if left.range(of: #"\[[^\]]*$"#, options: .regularExpression) != nil
             || left.range(of: #"\]\([^)]*$"#, options: .regularExpression) != nil { s.flags.insert("link") }
         return s
-    }
-
-    static func isInsideFence(_ ns: NSString, at caret: Int) -> Bool {
-        let before = ns.substring(to: caret)
-        var inside = false
-        before.enumerateLines { line, _ in
-            if line.trimmingCharacters(in: .whitespaces).hasPrefix("```") { inside.toggle() }
-        }
-        return inside
     }
 
     // MARK: Code fences
@@ -211,8 +202,9 @@ public enum MarkdownEditing {
         var open: CodeFence?
         var marker = ""
         var location = 0
-        var result: CodeFence?
-        text.enumerateLines { line, stop in
+        while location < ns.length {
+            let fullLine = ns.lineRange(for: NSRange(location: location, length: 0))
+            let line = ns.substring(with: fullLine).trimmingCharacters(in: .newlines)
             let lineNS = line as NSString
             let lineRange = NSRange(location: location, length: lineNS.length)
             let indent = line.prefix { $0 == " " }.count
@@ -220,7 +212,7 @@ public enum MarkdownEditing {
             if let current = open {
                 // A closing fence: the same marker, nothing after it.
                 if indent <= 3, body.hasPrefix(marker), body.trimmingCharacters(in: .whitespaces).allSatisfy({ $0 == marker.first }) {
-                    if caret >= current.openingLine.location && caret <= NSMaxRange(lineRange) { result = current; stop = true }
+                    if caret >= current.openingLine.location && caret <= NSMaxRange(lineRange) { return current }
                     open = nil
                 }
             } else if indent <= 3, let fence = ["```", "~~~"].first(where: { body.hasPrefix($0) }) {
@@ -233,10 +225,10 @@ public enum MarkdownEditing {
                 let range = NSRange(location: start, length: end - start)
                 open = CodeFence(openingLine: lineRange, languageRange: range, language: ns.substring(with: range))
             }
-            location += lineNS.length + 1
+            location = NSMaxRange(fullLine)
         }
-        if result == nil, let open, caret >= open.openingLine.location { return open }
-        return result
+        if let open, caret >= open.openingLine.location { return open }
+        return nil
     }
 
     /// Sets the language of `fence`: the edit to apply to the text.
@@ -272,17 +264,26 @@ public enum MarkdownEditing {
 
     public static func headings(_ text: String) -> [Heading] {
         var out: [Heading] = []
-        var inFence = false
-        var location = 0
-        text.enumerateLines { line, _ in
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~") { inFence.toggle() }
-            if !inFence, case .heading(let level) = kind(ofLine: line) {
+        var fence = ""
+        text.enumerateSubstrings(in: text.startIndex..<text.endIndex, options: .byLines) { line, range, _, _ in
+            guard let line else { return }
+            let indent = line.prefix { $0 == " " }.count
+            let body = line.dropFirst(indent)
+            if indent <= 3, let first = body.first, first == "`" || first == "~" {
+                let run = String(body.prefix { $0 == first })
+                if fence.isEmpty, run.count >= 3 {
+                    fence = run
+                } else if first == fence.first, run.count >= fence.count,
+                          body.dropFirst(run.count).trimmingCharacters(in: .whitespaces).isEmpty {
+                    fence = ""
+                }
+                return
+            }
+            if fence.isEmpty, case .heading(let level) = kind(ofLine: line) {
                 let title = line.drop { $0 == "#" }.trimmingCharacters(in: .whitespaces)
                     .replacingOccurrences(of: #"[*_`~=]"#, with: "", options: .regularExpression)
-                out.append(Heading(level: level, text: title, location: location))
+                out.append(Heading(level: level, text: title, location: NSRange(range, in: text).location))
             }
-            location += (line as NSString).length + 1
         }
         return out
     }

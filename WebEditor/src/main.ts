@@ -10,7 +10,7 @@ import './styles.css'
 import { EditorState, Selection } from '@tiptap/pm/state'
 import type { Node as PMNode } from '@tiptap/pm/model'
 import { createDocument, type Editor } from '@tiptap/core'
-import { createEditor, runCommand, selectionState, setImageBase } from './editor'
+import { createEditor, runCommand, selectionState, setImageBase, renderMermaid } from './editor'
 import { parseMarkdown, serializeMarkdown } from './markdown'
 import { FindBar } from './find'
 import { closePopover } from './popover'
@@ -567,8 +567,26 @@ const api = {
   },
 
   /** The active document as a standalone HTML page body (rendered math, diagrams). */
-  exportHTML(): { title: string; body: string } | null {
+  async exportHTML(): Promise<{ title: string; body: string } | null> {
     if (!activeId) return null
+    // Export must wait for the actual render, even on a cold or slow page.
+    await Promise.all(Array.from(host.querySelectorAll('.code-block.is-mermaid')).map(async block => {
+      const preview = block.querySelector('.diagram')!
+      try {
+        preview.innerHTML = await renderMermaid(block.querySelector('code')?.textContent ?? '')
+      } catch (error) {
+        preview.textContent = String(error)
+      }
+    }))
+    await document.fonts?.ready
+    // A remote image may never respond. Bound only that wait; local images
+    // normally decode immediately and failed images don't block export.
+    let imageTimeout: number | undefined
+    await Promise.race([
+      Promise.all(Array.from(host.querySelectorAll('img')).map(img => img.decode?.().catch(() => {}))),
+      new Promise(resolve => { imageTimeout = window.setTimeout(resolve, 5000) }),
+    ])
+    clearTimeout(imageTimeout)
     const clone = host.querySelector('.ProseMirror')!.cloneNode(true) as HTMLElement
     clone.querySelectorAll('.code-header, .ProseMirror-separator, .ProseMirror-trailingBreak, .ProseMirror-gapcursor').forEach(n => n.remove())
     clone.querySelectorAll('[contenteditable]').forEach(n => n.removeAttribute('contenteditable'))

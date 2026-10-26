@@ -9,7 +9,7 @@ import UniformTypeIdentifiers
 final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
     let workspace: Workspace
     /// The editor for all tabs of this window (web or native, see Settings).
-    private(set) var editor: DocumentEditor = WorkspaceWindowController.makeEditor()
+    private(set) var editor: DocumentEditor
     private var area: NSHostingController<EditorAreaView>!
     private var splitController: NSSplitViewController!
     private var sidebarItem: NSSplitViewItem!
@@ -17,13 +17,17 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
     /// The block-based observer for sidebar resizes; removed on close.
     private var splitObserver: NSObjectProtocol?
     private var treeReloadScheduled = false
+    private var treeReloadID = UUID()
+    private var treeShowsAllFiles = Preferences.shared.showAllFiles
     private var closeConfirmed = false
+    private var isSwitchingEngine = false
 
     /// Called when the window closes so the app can drop it.
     var onClose: ((WorkspaceWindowController) -> Void)?
 
-    init(folder: URL?) {
+    init(folder: URL?, editor: DocumentEditor? = nil) {
         workspace = Workspace(folder: folder)
+        self.editor = editor ?? Self.makeEditor()
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1120, height: 760),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
@@ -134,14 +138,21 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
 
     @objc private func preferencesChanged() {
         editor.applySettings()
-        if workspace.folder != nil { reloadTree() }
+        if treeShowsAllFiles != Preferences.shared.showAllFiles {
+            treeShowsAllFiles = Preferences.shared.showAllFiles
+            reloadTree()
+        }
         if Preferences.shared.editorEngine != engineInUse { Task { await switchEngine() } }
     }
 
     /// Swaps the web editor for the native one (or back), carrying every tab over.
     private func switchEngine() async {
-        await flushEditor()
-        let old = editor
+        guard !isSwitchingEngine else { return }
+        isSwitchingEngine = true
+        defer { isSwitchingEngine = false }
+        guard await flushEditor() else { return }
+        guard Preferences.shared.editorEngine != engineInUse else { return }
+        editor.onEvent = nil
         editor = Self.makeEditor()
         wireEditor()
         workspace.sourceMode = false
@@ -150,7 +161,6 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
             editor.open(id: tab.id, markdown: tab.unsavedText ?? tab.diskText ?? "", documentURL: tab.url, activate: false)
         }
         if let id = workspace.activeTabID { editor.activate(id: id) }
-        _ = old
         focusEditor()
     }
 
@@ -162,6 +172,9 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
             // Fresh page (first load or after a crash): send every document again.
             editor.applySettings()
             for tab in workspace.tabs {
+                // Edits not yet posted went down with the old page; don't let
+                // them block closing and quitting forever.
+                tab.isEditing = false
                 editor.open(id: tab.id, markdown: tab.unsavedText ?? tab.diskText ?? "", documentURL: tab.url, activate: false)
             }
             if let id = workspace.activeTabID { editor.activate(id: id) }
@@ -171,6 +184,7 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
             guard let tab = workspace.tab(id: id) else { return }
             tab.isEditing = false
             accept(markdown, for: tab)
+            if workspace.activeTabID != id { autoRename(tab) }
         case .selection(let state):
             workspace.selection = state
             workspace.sourceMode = state.sourceMode
@@ -201,9 +215,22 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
     }
 
     @discardableResult
-    private func write(_ tab: Tab) -> Bool {
+    private func write(_ tab: Tab, overwrite: Bool = false) -> Bool {
         guard let url = tab.url, let text = tab.unsavedText else { return true }
         do {
+            // FSEvents is delayed. Check disk before autosaving so an edit made
+            // by another app in that interval isn't silently overwritten.
+            if !overwrite {
+                guard FileManager.default.fileExists(atPath: url.path) else {
+                    tab.isMissing = true
+                    return false
+                }
+                let current = try TextFile.read(url).text
+                guard current == tab.diskText || current == text else {
+                    tab.hasConflict = true
+                    return false
+                }
+            }
             try TextFile.write(text, to: url)
             tab.diskText = text
             tab.unsavedText = nil
@@ -217,7 +244,8 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
     }
 
     /// Pulls any not-yet-posted edits out of the page.
-    func flushEditor() async {
+    @discardableResult
+    func flushEditor() async -> Bool {
         let result = await editor.flush()
         for (id, markdown) in result {
             if let tab = workspace.tab(id: id) {
@@ -225,6 +253,7 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
                 accept(markdown, for: tab)
             }
         }
+        return !workspace.tabs.contains { $0.isEditing }
     }
 
     func runCommand(_ name: String, _ args: [String: Any] = [:]) {
@@ -284,10 +313,10 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
 
     /// Gives an auto-named "Untitled.md" the name of its first line.
     private func autoRename(_ tab: Tab) {
-        guard tab.autoName, let url = tab.url, FileManager.default.fileExists(atPath: url.path),
+        guard tab.autoName, tab.unsavedText == nil, !tab.isEditing, !tab.hasConflict, !tab.isMissing,
+              let url = tab.url, FileManager.default.fileExists(atPath: url.path),
               url.deletingPathExtension().lastPathComponent.hasPrefix("Untitled"),
-              let title = DocumentTitle.from(markdown: tab.unsavedText ?? tab.diskText ?? "") else { return }
-        write(tab)
+              let title = DocumentTitle.from(markdown: tab.diskText ?? "") else { return }
         let dir = url.deletingLastPathComponent()
         let target = TextFile.availableURL(in: dir, base: title, ext: url.pathExtension.isEmpty ? "md" : url.pathExtension)
         do {
@@ -303,13 +332,15 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
     private func insert(_ tab: Tab, markdown: String, activate: Bool) {
         // New tabs open to the right of the active one, like VS Code.
         if let i = workspace.activeIndex { workspace.tabs.insert(tab, at: i + 1) } else { workspace.tabs.append(tab) }
-        // Leaving an auto-named "Untitled.md" names it after its first line.
-        if activate, let previous = workspace.activeTab, previous.id != tab.id { autoRename(previous) }
+        let previous = activate ? workspace.activeTab : nil
         editor.open(id: tab.id, markdown: markdown, documentURL: tab.url, activate: activate)
         if activate {
             workspace.activeTabID = tab.id
             focusEditor()
         }
+        // Native posts pending content while activating; Web posts it later.
+        // Name only saved content, whichever editor finishes first.
+        if let previous { autoRename(previous) }
         updateTitle()
     }
 
@@ -331,7 +362,7 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
     @discardableResult
     func closeTab(_ id: String) async -> Bool {
         guard let tab = workspace.tab(id: id) else { return true }
-        await flushEditor()
+        guard await flushEditor() else { return false }
         if tab.isDraft {
             guard await resolveDraft(tab) else { return false }
         } else if tab.unsavedText != nil, !(await resolveUnsaved(tab)) {
@@ -415,22 +446,27 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
         alert.buttons[2].hasDestructiveAction = true
         switch await alert.beginSheetModal(for: window) {
         case .alertFirstButtonReturn: return await save(tab)
-        case .alertThirdButtonReturn: return true
+        case .alertThirdButtonReturn:
+            tab.unsavedText = nil
+            editor.reload(id: tab.id, markdown: tab.diskText ?? "")
+            return true
         default: return false
         }
     }
 
     /// Asks about every tab with unsaved work. Used when closing the window or quitting.
     func prepareToClose(quitting: Bool = false) async -> Bool {
-        await flushEditor()
+        guard await flushEditor() else { return false }
         for tab in workspace.tabs {
-            autoRename(tab)
             if tab.isDraft {
                 // Quitting keeps drafts (they come back next launch); closing the window asks.
-                if quitting { write(tab) } else if !(await resolveDraft(tab)) { return false }
+                if quitting {
+                    guard write(tab) else { select(tab.id); return false }
+                } else if !(await resolveDraft(tab)) { return false }
             } else if tab.unsavedText != nil, !(await resolveUnsaved(tab)) {
                 return false
             }
+            autoRename(tab)
         }
         // Empty "Untitled.md" files made with ⌘N go away on close, not just
         // when their own tab is closed.
@@ -442,16 +478,17 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
 
     @discardableResult
     func save(_ tab: Tab) async -> Bool {
-        await flushEditor()
+        guard await flushEditor() else { return false }
         if tab.isUntitled || tab.isDraft { return await saveAs(tab) }
         if tab.unsavedText == nil, tab.isMissing { tab.unsavedText = tab.diskText ?? "" }
-        tab.hasConflict = false
-        return write(tab)
+        let saved = write(tab, overwrite: true)
+        if saved { tab.hasConflict = false }
+        return saved
     }
 
     @discardableResult
     func saveAs(_ tab: Tab) async -> Bool {
-        await flushEditor()
+        guard await flushEditor() else { return false }
         guard let window else { return false }
         let panel = NSSavePanel()
         panel.allowedContentTypes = [UTType(filenameExtension: "md") ?? .plainText]
@@ -461,6 +498,17 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
         panel.canCreateDirectories = true
         await waitForSheetToClose()
         guard await panel.beginSheetModal(for: window) == .OK, let url = panel.url else { return false }
+        // Saving over an open tab would discard that tab's in-memory edits.
+        let openWorkspaces = NSApp.windows.compactMap { ($0.windowController as? WorkspaceWindowController)?.workspace }
+        if openWorkspaces.contains(where: { $0.tab(for: url).map { $0.id != tab.id } == true }) {
+            await waitForSheetToClose()
+            let alert = NSAlert()
+            alert.messageText = "“\(url.lastPathComponent)” is already open."
+            alert.informativeText = "Close its tab before replacing the file."
+            await alert.beginSheetModal(for: window)
+            return false
+        }
+        guard await flushEditor() else { return false }
         let text = tab.unsavedText ?? tab.diskText ?? ""
         do {
             try TextFile.write(text, to: url)
@@ -468,8 +516,10 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
             showError(error)
             return false
         }
-        if let other = workspace.tab(for: url), other.id != tab.id { remove(other) }
-        if let draft = tab.url, Drafts.isDraft(draft) { try? FileManager.default.removeItem(at: draft) }
+        if let draft = tab.url, Drafts.isDraft(draft),
+           draft.standardizedFileURL.resolvingSymlinksInPath() != url.standardizedFileURL.resolvingSymlinksInPath() {
+            try? FileManager.default.removeItem(at: draft)
+        }
         tab.autoName = false
         tab.url = url.standardizedFileURL
         tab.untitledName = nil
@@ -499,8 +549,7 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
                 Task { await self.save(tab) }
             },
             close: { [weak self] id in
-                guard let self, let tab = self.workspace.tab(id: id) else { return }
-                self.remove(tab)
+                Task { await self?.closeTab(id) }
             }
         )
     }
@@ -511,6 +560,8 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
         tab.unsavedText = nil
         tab.hasConflict = false
         tab.isEditing = false
+        tab.saveError = nil
+        tab.isMissing = false
         editor.reload(id: id, markdown: text)
     }
 
@@ -568,11 +619,13 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
 
     func reloadTree() {
         guard let folder = workspace.folder else { workspace.tree = []; return }
+        let reloadID = UUID()
+        treeReloadID = reloadID
         let showAll = Preferences.shared.showAllFiles
         Task.detached(priority: .userInitiated) {
             let tree = FileTreeLoader.load(root: folder, showAllFiles: showAll)
             await MainActor.run { [weak self] in
-                guard let self, self.workspace.folder == folder else { return }
+                guard let self, self.workspace.folder == folder, self.treeReloadID == reloadID else { return }
                 self.workspace.tree = tree
                 self.revealActiveInTree()
             }
@@ -832,6 +885,7 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
             if workspace.expanded.remove(url.pathKey) != nil { workspace.expanded.insert(target.pathKey) }
             reloadTree()
             updateTitle()
+            rewatch()
         }
     }
 

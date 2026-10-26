@@ -26,7 +26,7 @@ public struct MarkdownTable: Equatable, Sendable {
     /// The table the caret is in, if any.
     public static func at(_ caret: Int, in text: String) -> MarkdownTable? {
         let ns = text as NSString
-        guard ns.length > 0 else { return nil }
+        guard ns.length > 0, MarkdownEditing.codeFence(containing: caret, in: text) == nil else { return nil }
         let caretLine = ns.lineRange(for: NSRange(location: min(caret, ns.length - 1), length: 0))
         guard isRow(ns.substring(with: caretLine)) else { return nil }
 

@@ -12,6 +12,7 @@ final class Exporter {
     private let webView = EditorWebView.make()
     private let window: NSWindow
     private var ready = false
+    private var isRunning = false
     private var waiters: [CheckedContinuation<Void, Never>] = []
 
     init() {
@@ -42,14 +43,16 @@ final class Exporter {
         // renders A again.
         webView.call("close", ["id": "export"])
         webView.call("open", ["id": "export", "markdown": markdown, "base": LocalFileSchemeHandler.baseURL(for: documentURL), "activate": true])
-        // Let KaTeX and Mermaid finish drawing.
-        try? await Task.sleep(for: .milliseconds(markdown.contains("```mermaid") ? 900 : 250))
+        // The page waits for diagrams, fonts and images before returning.
         guard let result = await webView.callAsync("exportHTML") as? [String: Any],
               let body = result["body"] as? String else { return nil }
         return (result["title"] as? String ?? "", body)
     }
 
     func run(_ kind: Kind, markdown: String, documentURL: URL?, suggestedName: String, in parent: NSWindow) async {
+        guard !isRunning, parent.attachedSheet == nil else { return NSSound.beep() }
+        isRunning = true
+        defer { isRunning = false }
         // Ask where to save first; the page renders while the user decides.
         var destination: URL?
         if kind != .print {
@@ -65,7 +68,7 @@ final class Exporter {
             destination = url
             if kind == .html {
                 do {
-                    try Self.htmlPage(title: page.title.isEmpty ? suggestedName : page.title, body: page.body)
+                    try Self.htmlPage(title: page.title.isEmpty ? suggestedName : page.title, body: page.body, documentURL: documentURL)
                         .write(to: url, atomically: true, encoding: .utf8)
                 } catch {
                     await NSAlert(error: error).beginSheetModal(for: parent)
@@ -96,11 +99,26 @@ final class Exporter {
     }
 
     /// A self-contained HTML page: the editor's styles, inlined.
-    static func htmlPage(title: String, body: String) -> String {
-        let cssURL = EditorWebView.editorDirectory?.appendingPathComponent("editor.css")
+    static func htmlPage(title: String, body: String, documentURL: URL? = nil) -> String {
+        let resources = EditorWebView.editorDirectory
+        let cssURL = resources?.appendingPathComponent("editor.css")
         var css = cssURL.flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? ""
-        // KaTeX fonts are referenced relatively; point them at a CDN copy so the file stands alone.
-        css = css.replacingOccurrences(of: "url(\"./fonts/", with: "url(\"https://cdn.jsdelivr.net/npm/katex@0.18.10/dist/fonts/")
+        // Keep formulas usable offline without making readers contact a CDN.
+        let fonts = try! NSRegularExpression(pattern: #"url\("\./(fonts/[^"\)]+)"\)"#)
+        for match in fonts.matches(in: css, range: NSRange(css.startIndex..., in: css)).reversed() {
+            let path = (css as NSString).substring(with: match.range(at: 1))
+            guard let url = resources?.appendingPathComponent(path), let data = try? Data(contentsOf: url) else { continue }
+            css = (css as NSString).replacingCharacters(in: match.range, with: "url(\"data:font/woff2;base64,\(data.base64EncodedString())\")")
+        }
+        var body = body
+        let images = try! NSRegularExpression(pattern: #"<img\b[^>]*\bsrc="([^"]+)""#)
+        for match in images.matches(in: body, range: NSRange(body.startIndex..., in: body)).reversed() {
+            let src = (body as NSString).substring(with: match.range(at: 1)).replacingOccurrences(of: "&amp;", with: "&")
+            guard let url = URL(string: src, relativeTo: documentURL?.deletingLastPathComponent()).map(\.absoluteURL),
+                  url.isFileURL, let data = try? Data(contentsOf: url) else { continue }
+            let mime = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
+            body = (body as NSString).replacingCharacters(in: match.range(at: 1), with: "data:\(mime);base64,\(data.base64EncodedString())")
+        }
         let escapedTitle = title.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;")
         return """
         <!doctype html>

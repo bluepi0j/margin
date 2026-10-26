@@ -6,8 +6,8 @@ let package = Package(
     platforms: [.macOS(.v14)],
     dependencies: [
         // Native TextKit 2 live-Markdown editor, used when Settings › Editor is "Native".
-        // Vendored from nodes-app/swift-markdown-engine 0.15.0 with a small patch
-        // (rendered code blocks, for Mermaid); see Vendor/README.md.
+        // Vendored from nodes-app/swift-markdown-engine 0.15.0 with small patches
+        // (rendered code blocks and paste whitespace); see Vendor/README.md.
         .package(path: "Vendor/swift-markdown-engine"),
         // In-app updates: checks the release feed, downloads, installs, relaunches.
         .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.10.0"),
@@ -39,5 +39,8 @@ let package = Package(
                                            "-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"])]
         ),
         .testTarget(name: "MarginCoreTests", dependencies: ["MarginCore"], path: "Tests/MarginCoreTests"),
+        .testTarget(name: "MarginTests", dependencies: [
+            "Margin", .product(name: "MarkdownEngine", package: "swift-markdown-engine"),
+        ], path: "Tests/MarginTests"),
     ]
 )

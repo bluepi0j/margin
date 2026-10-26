@@ -44,11 +44,11 @@ Margin needs macOS 14 Sonoma or later, on Apple silicon or Intel.
 
 ## Privacy
 
-Margin works on your files, on your Mac. The only thing it sends anywhere is the daily update check, which downloads the release feed from GitHub; turn it off in Settings › General.
+Margin edits and saves your files on your Mac. It checks GitHub for updates once a day; turn that off in Settings › General. The Web editor also loads remote images referenced by a document, contacting their servers. HTML exports embed available local images and formula fonts; remote image links remain external.
 
 ## Build from source
 
-You need macOS 14+ and Xcode (for the Swift toolchain and SDK). Node.js 18+ is only needed if you change the web editor; its built output is in the repo.
+You need macOS 14+ and Xcode (for the Swift toolchain and SDK). Node.js 20+ (22 is used in CI) is needed for web editor development and tests; its built output is in the repo.
 
 ```bash
 git clone https://github.com/bluepi0j/margin.git

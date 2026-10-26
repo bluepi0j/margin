@@ -144,7 +144,7 @@ function loadMermaid(): Promise<void> {
 }
 
 const mermaidCache = new Map<string, string>()
-async function renderMermaid(code: string): Promise<string> {
+export async function renderMermaid(code: string): Promise<string> {
   const cached = mermaidCache.get(code)
   if (cached) return cached
   await loadMermaid()
@@ -459,7 +459,7 @@ export function runCommand(editor: Editor, name: string, args: any = {}): boolea
     case 'link': return editLink(editor), true
     case 'paragraph': return c().setParagraph().run()
     case 'heading': {
-      const level = Number(args.level) || 1
+      const level = Number(args.level ?? 1)
       return level === 0 ? c().setParagraph().run() : c().toggleHeading({ level: level as any }).run()
     }
     case 'bulletList': return c().toggleBulletList().run()

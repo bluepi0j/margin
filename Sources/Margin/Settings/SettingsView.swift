@@ -108,7 +108,7 @@ struct SettingsView: View {
         ToggleRow(title: "Show all files in the sidebar", detail: "Not just Markdown — images and other files too.",
                   isOn: $prefs.showAllFiles)
         ToggleRow(title: "Check for updates automatically",
-                  detail: "Once a day, asks GitHub whether a newer Margin is out. Nothing else leaves your Mac.",
+                  detail: "Once a day, asks GitHub whether a newer Margin is out.",
                   isOn: $autoUpdate)
             .onChange(of: autoUpdate) { _, on in AppDelegate.shared.updaterController.updater.automaticallyChecksForUpdates = on }
         HStack {

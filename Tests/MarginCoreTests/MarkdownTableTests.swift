@@ -25,6 +25,11 @@ final class MarkdownTableTests: XCTestCase {
         XCTAssertNil(MarkdownTable.at(0, in: "| just a line with a pipe |\n"))
     }
 
+    func testCodeExampleIsNotAnEditableTable() {
+        let text = "```markdown\n| A | B |\n| --- | --- |\n| 1 | 2 |\n```\n"
+        XCTAssertNil(MarkdownTable.at((text as NSString).range(of: "| 1").location, in: text))
+    }
+
     func testTidyAlignsColumnsCountingWideCharacters() {
         let out = apply(MarkdownTable.at(at("Ada"), in: doc)!.applying(.tidy))
         XCTAssertTrue(out.contains("""

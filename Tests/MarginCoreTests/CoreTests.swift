@@ -91,6 +91,17 @@ final class FileTests: XCTestCase {
         XCTAssertEqual(FileTreeLoader.load(root: dir, showAllFiles: true).map(\.name), ["a.md", "image.png"])
     }
 
+    func testTreeDoesNotFollowDirectorySymlinks() throws {
+        try touch("docs/a.md")
+        try FileManager.default.createSymbolicLink(at: dir.appendingPathComponent("docs/loop"), withDestinationURL: dir)
+        XCTAssertEqual(FileTreeLoader.load(root: dir).flatMap(\.allFiles).map(\.lastPathComponent), ["a.md"])
+    }
+
+    func testTreeBudgetCountsEmptyDirectories() throws {
+        try touch("nested/deeper/hidden.md")
+        XCTAssertTrue(FileTreeLoader.load(root: dir, maxEntries: 1).isEmpty)
+    }
+
     func testNaturalSort() throws {
         try touch("note 10.md"); try touch("note 2.md")
         XCTAssertEqual(FileTreeLoader.load(root: dir).map(\.name), ["note 2.md", "note 10.md"])
@@ -106,6 +117,28 @@ final class FileTests: XCTestCase {
         let url = dir.appendingPathComponent("bom.md")
         try Data([0xEF, 0xBB, 0xBF] + Array("hi".utf8)).write(to: url)
         XCTAssertEqual(try TextFile.read(url).text, "hi")
+    }
+
+    func testLatin1IsNotMistakenForUTF16() throws {
+        let url = dir.appendingPathComponent("latin1.md")
+        try Data([0x63, 0x61, 0x66, 0xE9]).write(to: url)
+        XCTAssertEqual(try TextFile.read(url).text, "café")
+    }
+
+    func testUTF16WithBOMStillReads() throws {
+        let url = dir.appendingPathComponent("utf16.md")
+        try XCTUnwrap("# 你好\n".data(using: .utf16)).write(to: url)
+        XCTAssertEqual(try TextFile.read(url).text, "# 你好\n")
+    }
+
+    func testWritingThroughSymlinkKeepsTheLinkAndUpdatesItsTarget() throws {
+        let target = dir.appendingPathComponent("target.md")
+        let link = dir.appendingPathComponent("link.md")
+        try TextFile.write("old", to: target)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+        try TextFile.write("new", to: link)
+        XCTAssertEqual(try TextFile.read(target).text, "new")
+        XCTAssertTrue(try link.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink == true)
     }
 
     func testBinaryIsRejected() throws {

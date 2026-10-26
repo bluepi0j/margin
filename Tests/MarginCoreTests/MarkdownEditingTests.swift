@@ -91,6 +91,13 @@ final class MarkdownEditingTests: XCTestCase {
         XCTAssertEqual(MarkdownEditing.mapLocation(2, from: old, to: new), 2)  // before the change
     }
 
+    func testHeadingsUseRealCRLFOffsetsAndMatchingFences() {
+        let text = "# First\r\n\r\n````md\r\n```\r\n# Still code\r\n````\r\n## Last\r\n"
+        let headings = MarkdownEditing.headings(text)
+        XCTAssertEqual(headings.map(\.text), ["First", "Last"])
+        XCTAssertEqual(headings.last?.location, (text as NSString).range(of: "## Last").location)
+    }
+
     func testWordCount() {
         XCTAssertEqual(MarkdownEditing.wordCount("Hello, world! It's fine."), 4)
         XCTAssertEqual(MarkdownEditing.wordCount("中文字数 test"), 5)
@@ -135,5 +142,14 @@ final class CodeFenceTests: XCTestCase {
     func testUnclosedFenceRunsToEnd() {
         let text = "a\n```js\nlet x"
         XCTAssertEqual(MarkdownEditing.codeFence(containing: 12, in: text)?.language, "js")
+    }
+
+    func testCRLFLanguageEditUsesActualOffsets() throws {
+        let text = "Intro\r\n\r\n```python\r\nprint(1)\r\n```\r\n"
+        let caret = (text as NSString).range(of: "print").location
+        let fence = try XCTUnwrap(MarkdownEditing.codeFence(containing: caret, in: text))
+        let edit = MarkdownEditing.setLanguage("swift", of: fence)
+        XCTAssertEqual((text as NSString).replacingCharacters(in: edit.range, with: edit.text),
+                       "Intro\r\n\r\n```swift\r\nprint(1)\r\n```\r\n")
     }
 }

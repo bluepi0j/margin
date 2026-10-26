@@ -129,17 +129,7 @@ final class EditorWebView: WKWebView {
            FileManager.default.fileExists(atPath: r.appendingPathComponent("index.html").path) {
             return r
         }
-        let candidates = [
-            Bundle.main.resourceURL?.appendingPathComponent("Margin_Margin.bundle"),
-            Bundle.main.bundleURL.appendingPathComponent("Margin_Margin.bundle"),
-            Bundle.main.executableURL?.deletingLastPathComponent().appendingPathComponent("Margin_Margin.bundle"),
-        ]
-        for case let bundle? in candidates {
-            let root = Bundle(url: bundle)?.resourceURL ?? bundle
-            let dir = root.appendingPathComponent("Editor")
-            if FileManager.default.fileExists(atPath: dir.appendingPathComponent("index.html").path) { return dir }
-        }
-        return nil
+        return Bundle.module.url(forResource: "Editor", withExtension: nil)
     }
 
     // MARK: Calling into the page
