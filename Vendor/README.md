@@ -14,6 +14,9 @@ so Margin can carry small local patches; everything Margin added is marked
 - `TextView/NativeTextView/NativeTextView+PasteHandling.swift` — preserves pasted
   Markdown whitespace (leading indentation, trailing spaces and blank lines)
   instead of globally trimming and normalizing it.
+- `TextView/NativeTextViewWrapper.swift` — `updateNSView` re-applies a changed
+  `readingWidth` (the wrap width was only set in `makeNSView`, so Settings ›
+  Line width had no effect until the editor was recreated).
 
 The test targets and demo app are left out. To update: copy a newer release's
 `Sources/`, `Package.swift` (minus test targets) and `LICENSE` over this folder

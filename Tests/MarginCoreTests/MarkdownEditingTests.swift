@@ -50,6 +50,14 @@ final class MarkdownEditingTests: XCTestCase {
         XCTAssertEqual(apply(bullets, MarkdownEditing.setLineKind(bullets, NSRange(location: 0, length: 11), .task)), "- [ ] a\n- [ ] b\n- [ ] c")
     }
 
+    func testWrappingCRLFSelectionInCodeKeepsLineBreaks() throws {
+        let text = "first\r\nsecond"
+        let (block, caret) = try XCTUnwrap(MarkdownEditing.blockSnippet("codeBlock", selection: text))
+        let edit = MarkdownEditing.insertBlock(text, NSRange(location: 0, length: (text as NSString).length), block, caretOffset: caret)
+        XCTAssertEqual(apply(text, edit), "```\r\nfirst\r\nsecond\r\n```\r\n")
+        XCTAssertEqual(edit.selection.location, 5)
+    }
+
     func testInsertBlockOnOwnLines() {
         let t = "abc"
         let e = MarkdownEditing.insertBlock(t, NSRange(location: 3, length: 0), "---", caretOffset: 3)
@@ -101,6 +109,48 @@ final class MarkdownEditingTests: XCTestCase {
     func testWordCount() {
         XCTAssertEqual(MarkdownEditing.wordCount("Hello, world! It's fine."), 4)
         XCTAssertEqual(MarkdownEditing.wordCount("中文字数 test"), 5)
+    }
+
+    // MARK: Review regressions
+
+    func testListOverCRLFSelectionWithBlankLine() {
+        let t = "a\r\n\r\nb"
+        let e = MarkdownEditing.setLineKind(t, NSRange(location: 0, length: 6), .bullet)
+        XCTAssertEqual(apply(t, e), "- a\r\n- \r\n- b")
+    }
+
+    func testItalicRoundTripsInsideBold() {
+        let t = "**a**"
+        let on = MarkdownEditing.toggleInline(t, NSRange(location: 2, length: 1), marker: "*")
+        let both = apply(t, on)
+        XCTAssertEqual(both, "***a***")
+        XCTAssertEqual(apply(both, MarkdownEditing.toggleInline(both, on.selection, marker: "*")), t)
+    }
+
+    func testInsertBlockUsesTheDocumentsLineBreaks() {
+        let t = "abc\r\ndef"
+        let rule = MarkdownEditing.insertBlock(t, NSRange(location: 5, length: 0), "---", caretOffset: 3)
+        XCTAssertEqual(apply(t, rule), "abc\r\n\r\n---\r\n\r\ndef")
+        XCTAssertEqual(rule.selection.location, 5 + 2 + 3)
+        let code = MarkdownEditing.insertBlock(t, NSRange(location: 5, length: 0), "```\n\n```", caretOffset: 4)
+        XCTAssertEqual(apply(t, code), "abc\r\n\r\n```\r\n\r\n```\r\n\r\ndef")
+        XCTAssertEqual(code.selection.location, 5 + 2 + 5) // after "```\r\n"
+    }
+
+    func testIndentedHeadingTitleDropsTheMarker() {
+        XCTAssertEqual(MarkdownEditing.headings("  ## Foo").map(\.text), ["Foo"])
+        XCTAssertEqual(MarkdownEditing.headings("    # code, not a heading"), [])
+    }
+
+    func testStarBulletIsNotItalic() {
+        let s = MarkdownEditing.state("* item", caret: 4)
+        XCTAssertTrue(s.flags.contains("bulletList"))
+        XCTAssertFalse(s.flags.contains("italic"))
+    }
+
+    func testMultiLineSelectionCoversTheChangedLines() {
+        let e = MarkdownEditing.setLineKind("abc\ndef", NSRange(location: 1, length: 5), .heading(1))
+        XCTAssertEqual(e.selection, NSRange(location: 0, length: 10))
     }
 }
 

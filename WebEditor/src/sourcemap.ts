@@ -15,9 +15,18 @@ export function blockOffsets(editor: Editor, doc: PMNode, markdown: string): num
     const own = serializeMarkdown(editor, { type: 'doc', content: [block.toJSON()] }).trim()
     // A block may serialize a little differently on its own (escaping, list
     // numbers); its first characters are enough to find it.
+    // Blocks start on a line of their own: a match in the middle of a line
+    // is an earlier block's text.
     const probe = own.slice(0, 24)
-    const at = probe ? markdown.indexOf(probe, cursor) : -1
-    const start = at >= 0 ? at : cursor
+    let at = probe ? markdown.indexOf(probe, cursor) : -1
+    while (at > 0 && markdown[at - 1] !== '\n') at = markdown.indexOf(probe, at + 1)
+    let start = at
+    if (start < 0) {
+      // Nothing to find (an empty paragraph), or not found as serialized
+      // alone: the end of the line the cursor is on is the closest place.
+      const lineEnd = markdown.indexOf('\n', cursor)
+      start = cursor === 0 ? 0 : lineEnd >= 0 ? lineEnd : markdown.length
+    }
     offsets.push(start)
     if (at >= 0) cursor = start + Math.min(own.length, Math.max(1, probe.length))
   })
@@ -76,9 +85,12 @@ export function sourceOffset(doc: PMNode, offsets: number[], markdown: string, p
   const { node, pos: blockPos } = blockAt(doc, index)
   const end = index + 1 < offsets.length ? offsets[index + 1] : markdown.length
   let m = contentStart(node, markdown, offsets[index])
-  for (const ch of textUpTo(node, blockPos, pos)) {
+  // Indexed by UTF-16 unit, as positions and the Markdown string are; an
+  // emoji is two units and `for…of` would hand over the whole code point.
+  const upTo = textUpTo(node, blockPos, pos)
+  for (let i = 0; i < upTo.length; i++) {
     let at = m
-    while (at < end && !matches(ch, markdown[at])) at++
+    while (at < end && !matches(upTo[i], markdown[at])) at++
     if (at >= end) break
     m = at + 1
   }
@@ -94,7 +106,8 @@ export function docPosition(doc: PMNode, offsets: number[], markdown: string, of
   const blocks = textblocks(node, pos)
   const full = blocks.map(b => text(b.node)).join(SEP)
   let t = 0
-  for (const ch of markdown.slice(contentStart(node, markdown, offsets[index]), offset)) if (t < full.length && matches(full[t], ch)) t++
+  const source = markdown.slice(contentStart(node, markdown, offsets[index]), offset)
+  for (let i = 0; i < source.length; i++) if (t < full.length && matches(full[t], source[i])) t++
   // Walk the paragraphs to the one holding character t.
   for (const { node: tb, start } of blocks) {
     const len = text(tb).length

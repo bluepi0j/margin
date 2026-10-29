@@ -409,6 +409,11 @@ const api = {
     if (activeId === oldId) {
       activeId = newId
       setImageBase(baseURL)
+      // Recreate DOM against the new base without changing document state,
+      // selection or undo history. Direct src mutations would be parsed as edits.
+      const state = editor.state
+      editor.view.updateState(blankState)
+      editor.view.updateState(state)
     }
   },
 
@@ -595,6 +600,12 @@ const api = {
       img.removeAttribute('data-src')
     })
     clone.querySelectorAll('.code-block.is-mermaid pre').forEach(n => n.remove())
+    clone.querySelectorAll('.code-block:not(.is-mermaid) .diagram').forEach(n => n.remove())
+    clone.querySelectorAll('[data-placeholder]').forEach(n => {
+      n.removeAttribute('data-placeholder')
+      n.classList.remove('is-empty', 'is-editor-empty')
+      if (!n.className) n.removeAttribute('class')
+    })
     clone.querySelectorAll('.find-match').forEach(n => n.replaceWith(...Array.from(n.childNodes)))
     clone.removeAttribute('contenteditable')
     clone.removeAttribute('translate')

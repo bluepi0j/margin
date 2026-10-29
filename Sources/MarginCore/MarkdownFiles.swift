@@ -38,6 +38,15 @@ public extension URL {
         return (ups + target[common...]).joined(separator: "/")
     }
 
+    /// `self` as a Markdown link target relative to `directory`: spaces and
+    /// parentheses, which would end the link, are percent-encoded.
+    func markdownLinkPath(from directory: URL) -> String {
+        var allowed = CharacterSet.urlPathAllowed
+        allowed.remove(charactersIn: "()")
+        let path = relativePath(from: directory)
+        return path.addingPercentEncoding(withAllowedCharacters: allowed) ?? path
+    }
+
     /// Stable key for comparing file locations (no trailing slash, no `..`).
     var pathKey: String { standardizedFileURL.path }
 

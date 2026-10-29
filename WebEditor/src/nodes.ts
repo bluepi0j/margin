@@ -37,7 +37,7 @@ export const HtmlBlock = Node.create({
     mergeAttributes(HTMLAttributes, { 'data-type': 'html-block', class: 'raw-block', 'data-label': 'HTML' }),
     ['code', 0],
   ],
-  renderMarkdown: (node: any) => (node.content ?? []).map((n: any) => n.text ?? '').join(''),
+  renderMarkdown: (node: any) => (node.attrs?.rawStart ?? '') + (node.content ?? []).map((n: any) => n.text ?? '').join('') + (node.attrs?.rawEnd ?? ''),
 })
 
 /** Inline raw HTML such as <br> or <kbd>⌘</kbd>, kept verbatim. */
@@ -140,9 +140,11 @@ export const MarginBlockMath = BlockMath.extend({
         find: /^\$\$([^$]+)\$\$$/,
         handler: ({ state, range, match }) => {
           const $from = state.doc.resolve(range.from)
-          const from = $from.before()
-          const to = $from.after()
-          state.tr.replaceWith(from, to, this.type.create({ latex: match[1].trim() }))
+          const node = this.type.create({ latex: match[1].trim() })
+          // The whole paragraph when it holds nothing else; otherwise just the
+          // typed text, so what follows the caret in the paragraph survives.
+          if ($from.parent.textContent === match[0]) state.tr.replaceWith($from.before(), $from.after(), node)
+          else state.tr.replaceWith(range.from, range.to, node)
         },
       }),
     ]

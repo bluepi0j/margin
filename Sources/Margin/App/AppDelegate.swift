@@ -229,7 +229,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func saveSession() {
-        let ordered = NSApp.orderedWindows.compactMap { w in controllers.first { $0.window === w } }.reversed()
+        // Back to front, so restoring brings the front window up last.
+        // Windows not on screen (miniaturized) aren't in orderedWindows but still count.
+        let onScreen = NSApp.orderedWindows.compactMap { w in controllers.first { $0.window === w } }
+        let ordered = (onScreen + controllers.filter { c in !onScreen.contains { $0 === c } }).reversed()
         let state = SessionState(windows: ordered.map(\.sessionState).filter { $0.folder != nil || !$0.files.isEmpty })
         UserDefaults.standard.set(state.encoded(), forKey: Self.sessionKey)
     }
@@ -242,7 +245,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     return
                 }
             }
-            // Closing may rename new files or save drafts under a new path.
+            // Every window agreed: empty new files can go now, and closing may
+            // have renamed new files or saved drafts under a new path.
+            for c in controllers { c.removeEmptyUntitledFiles() }
             saveSession()
             sender.reply(toApplicationShouldTerminate: true)
         }

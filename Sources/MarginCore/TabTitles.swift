@@ -12,15 +12,15 @@ public enum TabTitles {
             }
             let clashes = urls.indices.filter { $0 != i && names[$0] == name }.compactMap { urls[$0] }
             guard !clashes.isEmpty else { return (name, nil) }
-            let mine = Array(url.deletingLastPathComponent().pathComponents.reversed())
+            // Without the root "/" component, which would join as "//a".
+            let parents = { (u: URL) in Array(u.deletingLastPathComponent().pathComponents.filter { $0 != "/" }.reversed()) }
+            let mine = parents(url)
             // Walk up until our parent chain differs from every clash.
             for depth in 1...max(1, mine.count) {
                 let suffix = Array(mine.prefix(depth))
-                let unique = clashes.allSatisfy { other in
-                    Array(other.deletingLastPathComponent().pathComponents.reversed().prefix(depth)) != suffix
-                }
+                let unique = clashes.allSatisfy { other in Array(parents(other).prefix(depth)) != suffix }
                 if unique || depth == mine.count {
-                    return (name, suffix.reversed().joined(separator: "/"))
+                    return (name, suffix.isEmpty ? nil : suffix.reversed().joined(separator: "/"))
                 }
             }
             return (name, nil)
