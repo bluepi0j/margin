@@ -3,6 +3,11 @@
 import { Node, mergeAttributes, InputRule } from '@tiptap/core'
 import { BlockMath, InlineMath } from '@tiptap/extension-mathematics'
 
+/** Wrapped around an HTML block's Markdown so tidy() (markdown.ts) leaves its
+ *  lines alone; private-use characters, never part of real text. */
+export const RAW_START = '\u{E000}'
+export const RAW_END = '\u{E001}'
+
 /** YAML front matter. Only ever the first node; parsed/serialized in markdown.ts. */
 export const FrontMatter = Node.create({
   name: 'frontMatter',
@@ -37,7 +42,7 @@ export const HtmlBlock = Node.create({
     mergeAttributes(HTMLAttributes, { 'data-type': 'html-block', class: 'raw-block', 'data-label': 'HTML' }),
     ['code', 0],
   ],
-  renderMarkdown: (node: any) => (node.content ?? []).map((n: any) => n.text ?? '').join(''),
+  renderMarkdown: (node: any) => RAW_START + (node.content ?? []).map((n: any) => n.text ?? '').join('') + RAW_END,
 })
 
 /** Inline raw HTML such as <br> or <kbd>⌘</kbd>, kept verbatim. */
@@ -140,9 +145,11 @@ export const MarginBlockMath = BlockMath.extend({
         find: /^\$\$([^$]+)\$\$$/,
         handler: ({ state, range, match }) => {
           const $from = state.doc.resolve(range.from)
-          const from = $from.before()
-          const to = $from.after()
-          state.tr.replaceWith(from, to, this.type.create({ latex: match[1].trim() }))
+          const node = this.type.create({ latex: match[1].trim() })
+          // The whole paragraph when it holds nothing else; otherwise just the
+          // typed text, so what follows the caret in the paragraph survives.
+          if ($from.parent.textContent === match[0]) state.tr.replaceWith($from.before(), $from.after(), node)
+          else state.tr.replaceWith(range.from, range.to, node)
         },
       }),
     ]

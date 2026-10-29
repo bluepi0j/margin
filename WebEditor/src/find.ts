@@ -47,7 +47,8 @@ function search(doc: PMNode, query: string) {
 
 function build(doc: PMNode, query: string, index: number): FindState {
   const matches = search(doc, query)
-  const clamped = matches.length ? Math.min(Math.max(index, 0), matches.length - 1) : -1
+  // -1: no current match (after replacing the last one, say) until Next/Previous.
+  const clamped = matches.length && index >= 0 ? Math.min(index, matches.length - 1) : -1
   const decorations = DecorationSet.create(
     doc,
     matches.map((m, i) => Decoration.inline(m.from, m.to, { class: i === clamped ? 'find-match current' : 'find-match' })),
@@ -168,9 +169,11 @@ export class FindBar {
     this.getEditor().commands.focus()
   }
 
-  /** Re-run the search after the editor swapped documents. */
+  /** Re-run the search after the editor swapped documents; with the bar
+   *  closed, drop the highlights this document kept from when it was open. */
   refresh() {
     if (this.isOpen) this.setQuery(this.input.value, 0)
+    else if (findState(this.getEditor().state)?.query) this.dispatch({ query: '', index: -1 })
   }
 
   next() {
@@ -185,7 +188,8 @@ export class FindBar {
     if (this.el.hidden) return this.open()
     const s = findState(this.getEditor().state)
     if (!s || !s.matches.length) return
-    const index = (s.index + delta + s.matches.length) % s.matches.length
+    const n = s.matches.length
+    const index = s.index < 0 ? (delta > 0 ? 0 : n - 1) : (s.index + delta + n) % n
     this.dispatch({ index })
     this.reveal()
   }
@@ -205,6 +209,7 @@ export class FindBar {
     const s = findState(this.getEditor().state)
     if (!s || !s.query) this.count.textContent = ''
     else if (!s.matches.length) this.count.textContent = 'No results'
+    else if (s.index < 0) this.count.textContent = `${s.matches.length} ${s.matches.length === 1 ? 'match' : 'matches'}`
     else this.count.textContent = `${s.index + 1} of ${s.matches.length}`
     this.el.classList.toggle('no-results', !!s?.query && !s.matches.length)
   }
@@ -231,7 +236,11 @@ export class FindBar {
     if (text) tr.insertText(text, m.from, m.to)
     else tr.delete(m.from, m.to)
     editor.view.dispatch(tr)
-    this.dispatch({ index: s.index })
+    // On to the next match after the replacement (which may itself contain
+    // the query); none when there isn't one, so Replace can't loop on it.
+    const after = m.from + text.length
+    const next = (findState(editor.state)?.matches ?? []).findIndex(x => x.from >= after)
+    this.dispatch({ index: next })
     this.reveal()
   }
 

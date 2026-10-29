@@ -3,6 +3,7 @@
 import { Editor, Extension, InputRule } from '@tiptap/core'
 import StarterKit from '@tiptap/starter-kit'
 import Strike from '@tiptap/extension-strike'
+import { Link } from '@tiptap/extension-link'
 import Placeholder from '@tiptap/extension-placeholder'
 import Image from '@tiptap/extension-image'
 import Highlight from '@tiptap/extension-highlight'
@@ -312,6 +313,22 @@ const MarginStrike = Strike.extend({
   },
 })
 
+// Links: a bare URL or address stays bare on save (the parser autolinks it;
+// TipTap would write it back as [url](url)), and an href with spaces goes in
+// <…> so it can be read back as a link.
+const MarginLink = Link.extend({
+  renderMarkdown: (node: any, h: any, context?: any) => {
+    const href: string = node.attrs?.href ?? ''
+    const title: string = node.attrs?.title ?? ''
+    const text: string = h.renderChildren(node)
+    // The serializer renders marks around a placeholder; the real text is in the context.
+    const actual: string = context?.meta?.markText ?? text
+    if (!title && (actual === href || `mailto:${actual}` === href)) return text
+    const target = /\s/.test(href) ? `<${href}>` : href
+    return title ? `[${text}](${target} "${title}")` : `[${text}](${target})`
+  },
+}).configure({ openOnClick: false, autolink: true, linkOnPaste: true, enableClickSelection: false })
+
 // macOS "smart quotes and dashes" (WebKit follows the system setting) turn
 // `-->` into `—>` and `"x"` into “x”, which breaks code and diagrams. Code is
 // marked spellcheck=false, which keeps WebKit's text checking out of it; this
@@ -407,9 +424,10 @@ export function createEditor(element: HTMLElement): Editor {
         underline: false,
         trailingNode: false,
         code: { HTMLAttributes: { spellcheck: 'false' } },
-        link: { openOnClick: false, autolink: true, linkOnPaste: true, enableClickSelection: false },
+        link: false,
       }),
       MarginStrike,
+      MarginLink,
       MarginCodeBlock.configure({ lowlight, defaultLanguage: null, enableTabIndentation: true } as any),
       Placeholder.configure({ placeholder: 'Start writing…' }),
       MarginImage,

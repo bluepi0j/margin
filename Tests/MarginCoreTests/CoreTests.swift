@@ -18,6 +18,11 @@ final class TabTitleTests: XCTestCase {
         XCTAssertEqual(t.map(\.hint), ["a/notes", "b/notes"])
     }
 
+    func testHintNeverIncludesTheRoot() {
+        let t = TabTitles.titles(for: [URL(fileURLWithPath: "/a/x.md"), URL(fileURLWithPath: "/b/a/x.md")], untitledNames: [nil, nil])
+        XCTAssertEqual(t.map(\.hint), ["a", "b/a"])
+    }
+
     func testUntitled() {
         let t = TabTitles.titles(for: [nil], untitledNames: ["Untitled 2"])
         XCTAssertEqual(t[0].title, "Untitled 2")
@@ -174,6 +179,27 @@ final class DocumentTitleTests: XCTestCase {
         XCTAssertEqual(DocumentTitle.from(markdown: "[link text](http://a.b) more"), "link text more")
         XCTAssertNil(DocumentTitle.from(markdown: "  \n\n"))
         XCTAssertEqual(DocumentTitle.from(markdown: "# 中文标题"), "中文标题")
+    }
+
+    func testTitleFromCRLFDocument() {
+        XCTAssertEqual(DocumentTitle.from(markdown: "# My Plan\r\n\r\nbody"), "My Plan")
+        XCTAssertEqual(DocumentTitle.from(markdown: "---\r\ntitle: x\r\n---\r\n\r\n## Real"), "Real")
+    }
+
+    func testSavingADraftTakesItsImagesAlong() throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent("margin-draft-\(UUID().uuidString)")
+        let drafts = base.appendingPathComponent("Drafts")
+        let docs = base.appendingPathComponent("out/docs")
+        try FileManager.default.createDirectory(at: drafts.appendingPathComponent("assets"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: docs, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        try Data([1]).write(to: drafts.appendingPathComponent("assets/shot 1.png"))
+        try Data([2]).write(to: base.appendingPathComponent("pic.png"))
+        let markdown = "![a](assets/shot%201.png) ![b](../pic.png) ![c](https://x/y.png) ![d](assets/missing.png)"
+        let out = Drafts.relocateImages(in: markdown, from: drafts, to: docs)
+        XCTAssertEqual(out, "![a](assets/shot%201.png) ![b](../../pic.png) ![c](https://x/y.png) ![d](assets/missing.png)")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: docs.appendingPathComponent("assets/shot 1.png").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: drafts.appendingPathComponent("assets/shot 1.png").path))
     }
 
     func testDraftDetection() {

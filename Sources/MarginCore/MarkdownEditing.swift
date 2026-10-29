@@ -46,9 +46,22 @@ public enum MarkdownEditing {
         return Edit(range: sel, text: wrapped, selection: NSRange(location: sel.location + m, length: sel.length))
     }
 
+    /// Exactly "**" on both sides of the selection: the star next to it is
+    /// bold's, so italic wraps instead of unwrapping. ("***" is bold+italic.)
     private static func isBoldBoundary(_ ns: NSString, _ sel: NSRange) -> Bool {
-        sel.location >= 2 && ns.substring(with: NSRange(location: sel.location - 2, length: 2)) == "**"
-            && NSMaxRange(sel) + 2 <= ns.length && ns.substring(with: NSRange(location: NSMaxRange(sel), length: 2)) == "**"
+        starRun(in: ns, before: sel.location) == 2 && starRun(in: ns, after: NSMaxRange(sel)) == 2
+    }
+
+    private static func starRun(in ns: NSString, before location: Int) -> Int {
+        var n = 0
+        while location - n > 0, ns.character(at: location - n - 1) == 0x2A { n += 1 }
+        return n
+    }
+
+    private static func starRun(in ns: NSString, after location: Int) -> Int {
+        var n = 0
+        while location + n < ns.length, ns.character(at: location + n) == 0x2A { n += 1 }
+        return n
     }
 
     public static func link(_ text: String, _ sel: NSRange, url: String = "") -> Edit {
@@ -92,7 +105,10 @@ public enum MarkdownEditing {
         let ns = text as NSString
         let range = lineRange(text, sel)
         let block = ns.substring(with: range)
-        var lines = block.components(separatedBy: "\n")
+        // Split on the text's own line break: "\r\n" is one Character, so
+        // splitting on "\n" would leave a "\r" on every line.
+        let newline = block.contains("\r\n") ? "\r\n" : "\n"
+        var lines = block.components(separatedBy: newline)
         // An empty last line (caret at the very end) is still one line to style.
         let trailing = lines.count > 1 && lines.last == "" ? lines.removeLast() : nil
         let allAlready = lines.allSatisfy { self.kind(ofLine: $0) == kind }
@@ -113,13 +129,13 @@ public enum MarkdownEditing {
             case .paragraph: return indent + body
             }
         }
-        var replacement = out.joined(separator: "\n")
-        if trailing != nil { replacement += "\n" }
+        var replacement = out.joined(separator: newline)
+        if trailing != nil { replacement += newline }
         // Keep the caret at the end of the (first) changed line's text.
         let delta = (replacement as NSString).length - range.length
         let newSel: NSRange = sel.length == 0
             ? NSRange(location: max(range.location, min(sel.location + (out.first.map { ($0 as NSString).length - ((lines.first ?? "") as NSString).length } ?? 0), range.location + (replacement as NSString).length)), length: 0)
-            : NSRange(location: range.location, length: max(0, sel.length + delta))
+            : NSRange(location: range.location, length: max(0, NSMaxRange(sel) + delta - range.location))
         return Edit(range: range, text: replacement, selection: newSel)
     }
 
@@ -128,13 +144,17 @@ public enum MarkdownEditing {
     /// Inserts a block (code fence, table, formula, divider) on its own lines.
     public static func insertBlock(_ text: String, _ sel: NSRange, _ block: String, caretOffset: Int) -> Edit {
         let ns = text as NSString
-        let prefix = ns.substring(to: sel.location)
+        // Line breaks as the text has them; NSString's hasSuffix sees the "\n" in "\r\n".
+        let nl = text.contains("\r\n") ? "\r\n" : "\n"
+        let prefix = ns.substring(to: sel.location) as NSString
         let after = NSMaxRange(sel) < ns.length ? ns.substring(with: NSRange(location: NSMaxRange(sel), length: 1)) : "\n"
         // Blocks get a blank line above them (unless at the top of the document).
-        let lead = prefix.isEmpty || prefix.hasSuffix("\n\n") ? "" : (prefix.hasSuffix("\n") ? "\n" : "\n\n")
-        let tail = after == "\n" ? "\n" : "\n\n"
-        let insert = lead + block + tail
-        return Edit(range: sel, text: insert, selection: NSRange(location: sel.location + (lead as NSString).length + caretOffset, length: 0))
+        let lead = prefix.length == 0 || prefix.hasSuffix(nl + nl) ? "" : (prefix.hasSuffix("\n") ? nl : nl + nl)
+        let tail = after == "\n" || after == "\r" ? nl : nl + nl
+        let body = block.replacingOccurrences(of: "\n", with: nl)
+        let caret = (block as NSString).substring(to: caretOffset).replacingOccurrences(of: "\n", with: nl)
+        let insert = lead + body + tail
+        return Edit(range: sel, text: insert, selection: NSRange(location: sel.location + (lead as NSString).length + (caret as NSString).length, length: 0))
     }
 
     public static func blockSnippet(_ command: String, selection: String) -> (String, Int)? {
@@ -171,9 +191,12 @@ public enum MarkdownEditing {
         case .paragraph: break
         }
         if codeFence(containing: caret, in: text) != nil { s.flags.insert("codeBlock") }
-        // Inline marks: an odd number of markers before the caret on this line.
-        let col = caret - lineR.location
-        let left = (line as NSString).substring(to: min(col, (line as NSString).length))
+        // Inline marks: an odd number of markers before the caret on this line,
+        // not counting the block prefix (a "* " bullet is not italic).
+        let lineNS = line as NSString
+        let col = min(caret - lineR.location, lineNS.length)
+        let prefixEnd = prefixPattern.firstMatch(in: line, range: NSRange(location: 0, length: lineNS.length)).map { NSMaxRange($0.range) } ?? 0
+        let left = col > prefixEnd ? lineNS.substring(with: NSRange(location: prefixEnd, length: col - prefixEnd)) : ""
         func open(_ marker: String) -> Bool { left.components(separatedBy: marker).count % 2 == 0 }
         if open("**") { s.flags.insert("bold") }
         if open("~~") { s.flags.insert("strike") }
@@ -279,8 +302,9 @@ public enum MarkdownEditing {
                 }
                 return
             }
-            if fence.isEmpty, case .heading(let level) = kind(ofLine: line) {
-                let title = line.drop { $0 == "#" }.trimmingCharacters(in: .whitespaces)
+            // Up to 3 spaces of indent is still a heading; 4 is an indented code block.
+            if fence.isEmpty, indent <= 3, case .heading(let level) = kind(ofLine: line) {
+                let title = body.drop { $0 == "#" }.trimmingCharacters(in: .whitespaces)
                     .replacingOccurrences(of: #"[*_`~=]"#, with: "", options: .regularExpression)
                 out.append(Heading(level: level, text: title, location: NSRange(range, in: text).location))
             }

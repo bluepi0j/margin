@@ -578,6 +578,29 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
             || abs(textView.textContainerInset.height - desiredTextInset.height) > 0.5 {
             textView.textContainerInset = desiredTextInset
         }
+        // [Margin patch] The wrap width is fixed in makeNSView; re-apply it when the
+        // embedder changes `readingWidth` later (Settings › Line width), the same
+        // way makeNSView set it up, then re-measure and re-center the column.
+        if textView.configuration.readingWidth != configuration.readingWidth,
+           let textContainer = textView.textContainer {
+            textView.configuration.readingWidth = configuration.readingWidth
+            context.coordinator.configuration.readingWidth = configuration.readingWidth
+            if let readingWidth = configuration.readingWidth {
+                textContainer.widthTracksTextView = false
+                textContainer.size = NSSize(width: readingWidth, height: .greatestFiniteMagnitude)
+            } else {
+                textContainer.widthTracksTextView = true
+            }
+            if let tlm = textView.textLayoutManager {
+                tlm.invalidateLayout(for: tlm.documentRange)
+            }
+            let clipWidth = nsView.contentView.bounds.width
+            textView.applyManagedFrameSize(width: configuration.readingWidth != nil ? textView.readingColumnWidth : clipWidth)
+            textView.recalcOverscroll(for: nsView)
+            textView.centerReadingColumn(forClipWidth: clipWidth)
+            context.coordinator.didEnsureLayoutForCurrentDocument = false
+            textView.needsDisplay = true
+        }
         // Refresh services/theme when the embedder hands us a new configuration
         // (e.g. when the available wiki-link targets change). Cheap pointer-/
         // value-based comparison; full equality isn't required because the

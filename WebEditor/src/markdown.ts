@@ -8,7 +8,7 @@
 //   - Escaping on save is minimal, so editing one line does not sprinkle
 //     backslashes and &amp; across the rest of the file.
 import type { Editor, JSONContent } from '@tiptap/core'
-import { INLINE_MATH } from './nodes'
+import { INLINE_MATH, RAW_END, RAW_START } from './nodes'
 
 const FRONT_MATTER = /^---[ \t]*\r?\n([\s\S]*?)\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/
 
@@ -29,7 +29,8 @@ export function parseMarkdown(editor: Editor, markdown: string): JSONContent {
       content: frontMatter ? [{ type: 'text', text: frontMatter }] : [],
     })
   }
-  if (doc.content.length === 0) doc.content.push({ type: 'paragraph' })
+  // Always somewhere to type: an empty file, or one that is only front matter.
+  if (doc.content.every(n => n.type === 'frontMatter')) doc.content.push({ type: 'paragraph' })
   return normalize(editor, doc)
 }
 
@@ -65,16 +66,19 @@ export function normalize(editor: Editor, node: JSONContent): JSONContent {
 
 export function serializeMarkdown(editor: Editor, doc: JSONContent): string {
   const content = doc.content ?? []
+  // Front matter stays at the top of the file even when editing (a gap
+  // cursor before it, a block dropped above it) has put a node before it.
+  const fm = content.findIndex(n => n.type === 'frontMatter')
   let prefix = ''
   let rest = content
-  if (content[0]?.type === 'frontMatter') {
-    const text = (content[0].content ?? []).map(n => n.text ?? '').join('')
-    prefix = `---\n${text}\n---\n\n`
-    rest = content.slice(1)
+  if (fm >= 0) {
+    const text = (content[fm].content ?? []).map(n => n.text ?? '').join('')
+    prefix = `---\n${text}\n---\n`
+    rest = content.filter((_, i) => i !== fm)
   }
-  let body = editor.markdown!.serialize({ ...doc, content: rest })
-  body = tidy(body)
-  return prefix + body + '\n'
+  const body = tidy(editor.markdown!.serialize({ ...doc, content: rest }))
+  if (!prefix) return body + '\n'
+  return body ? `${prefix}\n${body}\n` : prefix
 }
 
 /**
@@ -90,15 +94,28 @@ export function serializeMarkdown(editor: Editor, doc: JSONContent): string {
 function tidy(body: string): string {
   const out: string[] = []
   let fence = '' // the opening run ('```', '~~~~'…); '' when outside code
+  let raw = false // inside an HTML block, marked by RAW_START … RAW_END
   let blanks = 0
   for (let line of body.split('\n')) {
-    const m = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line)
-    if (fence) {
-      if (m && m[1][0] === fence[0] && m[1].length >= fence.length && m[2].trim() === '') fence = ''
-    } else if (m) {
-      fence = m[1]
+    let verbatim: boolean
+    if (raw) {
+      verbatim = true
+      if (line.includes(RAW_END)) raw = false
+    } else if (line.includes(RAW_START)) {
+      verbatim = true
+      raw = !line.includes(RAW_END)
+    } else {
+      // A fence may sit in a quote or a nested list, behind any run of
+      // quote markers and indentation.
+      const m = /^[ >]*(`{3,}|~{3,})(.*)$/.exec(line)
+      if (fence) {
+        if (m && m[1][0] === fence[0] && m[1].length >= fence.length && m[2].trim() === '') fence = ''
+      } else if (m) {
+        fence = m[1]
+      }
+      verbatim = fence !== ''
     }
-    if (fence) {
+    if (verbatim) {
       blanks = 0
       out.push(line)
       continue
@@ -113,7 +130,7 @@ function tidy(body: string): string {
     }
     out.push(line)
   }
-  return out.join('\n').replace(/^\n+/, '').replace(/\s+$/, '')
+  return out.join('\n').replace(/^\n+/, '').replace(/\s+$/, '').replaceAll(RAW_START, '').replaceAll(RAW_END, '')
 }
 
 // ---------------------------------------------------------------------------
@@ -122,6 +139,8 @@ function tidy(body: string): string {
 // Only escape a character when leaving it bare could change how the text
 // parses. TipTap's default escapes every `*`, `_`, `[`, `<` and `&`.
 export function escapeText(text: string): string {
+  // "==" only opens a highlight when another "==" closes it.
+  const highlightable = (text.match(/==/g) ?? []).length >= 2
   let out = ''
   for (let i = 0; i < text.length; i++) {
     const ch = text[i]
@@ -143,7 +162,7 @@ export function escapeText(text: string): string {
         break
       }
       case '=':
-        out += next === '=' || prev === '=' ? '\\=' : '='
+        out += highlightable && (next === '=' || prev === '=') ? '\\=' : '='
         break
       case '[':
         out += /^\[[^\]]*\](?:\(|\[|:)/.test(text.slice(i)) || next === '^' ? '\\[' : '['
@@ -156,13 +175,30 @@ export function escapeText(text: string): string {
         out += /[A-Za-z\/!?]/.test(next) ? '&lt;' : '<'
         break
       case '&':
-        out += /^&(?:#\d+|#x[0-9a-f]+|[a-z][a-z0-9]*);/i.test(text.slice(i)) ? '&amp;' : '&'
+        // Only the entities the parser decodes need escaping. Others ("&copy;")
+        // reach the text as written, and must go back as written.
+        out += /^&(?:#\d+|#x[0-9a-f]+|lt|gt|quot|amp);/i.test(text.slice(i)) ? '&amp;' : '&'
         break
       default:
         out += ch
     }
   }
   return out
+}
+
+/**
+ * Text at the start of a paragraph line must not read as block syntax: a
+ * heading, list item, quote or rule marker there gets a backslash.
+ */
+export function escapeLineStart(text: string): string {
+  // Four spaces (or a tab) would make an indented code block; an entity for
+  // the first one keeps the text a paragraph and reads back as the space.
+  if (/^( {4}|\t)/.test(text)) return (text[0] === '\t' ? '&#9;' : '&#32;') + text.slice(1)
+  const m = /^(\s*)(?:(#{1,6}|[-+*])(?=\s|$)|(>)|(\d+)([.)])(?=\s|$)|([-*_])(?=(?:\s*\6){2,}\s*$))/.exec(text)
+  if (!m) return text
+  const [whole, ws, marker, quote, num, sep, rule] = m
+  const head = num ? `${num}\\${sep}` : `\\${marker ?? quote ?? rule}`
+  return ws + head + text.slice(whole.length)
 }
 
 /** Swap TipTap's text encoder for the minimal one above. */
@@ -173,7 +209,11 @@ export function installMinimalEscaping(editor: Editor) {
     const inCode =
       (parent?.type != null && codeTypes.has(parent.type)) ||
       (node.marks ?? []).some((m: any) => codeTypes.has(typeof m === 'string' ? m : m.type))
-    return inCode ? text : escapeText(text)
+    if (inCode) return text
+    // First on its line of a paragraph: at the start, or after a hard break.
+    const i = parent?.type === 'paragraph' ? (parent.content ?? []).indexOf(node) : -1
+    const startsLine = i === 0 || (i > 0 && parent!.content![i - 1].type === 'hardBreak')
+    return startsLine ? escapeLineStart(escapeText(text)) : escapeText(text)
   }
   // Raw HTML stays raw: block HTML becomes an htmlBlock node, inline HTML an
   // htmlInline atom. Both serialize back byte for byte.

@@ -14,6 +14,8 @@ public struct MarkdownTable: Equatable, Sendable {
     /// Where the caret is: row index into `rows`, and column.
     public let caretRow: Int
     public let caretColumn: Int
+    /// The line break between rows, as the text uses it ("\n" or "\r\n").
+    let newline: String
 
     public var columnCount: Int { alignments.count }
 
@@ -27,7 +29,8 @@ public struct MarkdownTable: Equatable, Sendable {
     public static func at(_ caret: Int, in text: String) -> MarkdownTable? {
         let ns = text as NSString
         guard ns.length > 0, MarkdownEditing.codeFence(containing: caret, in: text) == nil else { return nil }
-        let caretLine = ns.lineRange(for: NSRange(location: min(caret, ns.length - 1), length: 0))
+        let caret = min(caret, ns.length)
+        let caretLine = ns.lineRange(for: NSRange(location: caret, length: 0))
         guard isRow(ns.substring(with: caretLine)) else { return nil }
 
         // Grow to the contiguous run of `|` lines around the caret.
@@ -53,16 +56,19 @@ public struct MarkdownTable: Equatable, Sendable {
         let columns = max(alignments.count, rows.map(\.count).max() ?? 0)
         rows = rows.map { $0 + Array(repeating: "", count: columns - $0.count) }
 
-        let lineIndex = lines.firstIndex { NSLocationInRange(min(caret, ns.length - 1), $0) } ?? 0
+        // The line the caret is on, counting a caret at the very end of the last row as on it.
+        let lineIndex = lines.lastIndex { $0.location <= caret } ?? 0
         let before = ns.substring(with: NSRange(location: lines[lineIndex].location, length: caret - lines[lineIndex].location))
         let column = max(0, min(columns - 1, pipeCount(before) - (texts[lineIndex].trimmingCharacters(in: .whitespaces).hasPrefix("|") ? 1 : 0)))
         let row = min(rows.count - 1, lineIndex == 0 ? 0 : max(1, lineIndex - 1))   // the separator counts as the first body row
 
-        let last = lines[lines.count - 1]
-        let end = NSMaxRange(last) - (ns.substring(with: last).hasSuffix("\n") ? 1 : 0)
+        // Stop before the last row's line break, whether it is "\n" or "\r\n".
+        var end = 0
+        ns.getLineStart(nil, end: nil, contentsEnd: &end, for: lines[lines.count - 1])
+        let newline = (ns.substring(with: lines[0]) as NSString).hasSuffix("\r\n") ? "\r\n" : "\n"
         return MarkdownTable(range: NSRange(location: start, length: end - start), rows: rows,
                              alignments: alignments + Array(repeating: .none, count: columns - alignments.count),
-                             caretRow: row, caretColumn: column)
+                             caretRow: row, caretColumn: column, newline: newline)
     }
 
     // MARK: Editing
@@ -129,7 +135,7 @@ public struct MarkdownTable: Equatable, Sendable {
                 out += cell + String(repeating: " ", count: widths[c] - Self.width(cell)) + " |"
             }
             starts.append(rowStarts)
-            out += "\n"
+            out += newline
         }
         line(rows[0])
         out += "|" + alignments.enumerated().map { c, a in
@@ -140,9 +146,9 @@ public struct MarkdownTable: Equatable, Sendable {
             case .right: return " \(dashes): "
             case .center: return " :\(dashes): "
             }
-        }.joined(separator: "|") + "|\n"
+        }.joined(separator: "|") + "|" + newline
         for r in rows.dropFirst() { line(r) }
-        out.removeLast()                               // no newline after the last row
+        out.removeLast()                               // no newline after the last row ("\r\n" is one Character)
         return (out, starts)
     }
 

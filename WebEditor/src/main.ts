@@ -595,6 +595,12 @@ const api = {
       img.removeAttribute('data-src')
     })
     clone.querySelectorAll('.code-block.is-mermaid pre').forEach(n => n.remove())
+    clone.querySelectorAll('.code-block:not(.is-mermaid) .diagram').forEach(n => n.remove())
+    clone.querySelectorAll('[data-placeholder]').forEach(n => {
+      n.removeAttribute('data-placeholder')
+      n.classList.remove('is-empty', 'is-editor-empty')
+      if (!n.className) n.removeAttribute('class')
+    })
     clone.querySelectorAll('.find-match').forEach(n => n.replaceWith(...Array.from(n.childNodes)))
     clone.removeAttribute('contenteditable')
     clone.removeAttribute('translate')

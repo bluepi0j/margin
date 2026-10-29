@@ -19,6 +19,22 @@ final class MarkdownTableTests: XCTestCase {
         XCTAssertEqual(t.map { (doc as NSString).substring(with: $0.range) }, "| Name | Age |\n|---|--:|\n| Ada | 36 |\n| 林纳斯 | 54 |")
     }
 
+    func testTableInCRLFDocumentKeepsItsLineBreaks() throws {
+        let t = "| A | B |\r\n|---|---|\r\n| 1 | 2 |\r\n\r\nAfter\r\n"
+        let table = try XCTUnwrap(MarkdownTable.at(2, in: t))
+        XCTAssertEqual((t as NSString).substring(with: table.range), "| A | B |\r\n|---|---|\r\n| 1 | 2 |")
+        let e = table.applying(.tidy).edit
+        XCTAssertEqual((t as NSString).replacingCharacters(in: e.range, with: e.text),
+                       "| A   | B   |\r\n| --- | --- |\r\n| 1   | 2   |\r\n\r\nAfter\r\n")
+    }
+
+    func testCaretAfterTheLastRowIsOutside() {
+        let t = "| A | B |\n|---|---|\n| 1 | 2 |\n"
+        XCTAssertNil(MarkdownTable.at((t as NSString).length, in: t))
+        let noNewline = "| A | B |\n|---|---|\n| 1 | 2 |"
+        XCTAssertEqual(MarkdownTable.at((noNewline as NSString).length, in: noNewline)?.caretRow, 1)
+    }
+
     func testOutsideIsNil() {
         XCTAssertNil(MarkdownTable.at(at("Intro"), in: doc))
         XCTAssertNil(MarkdownTable.at(at("After"), in: doc))

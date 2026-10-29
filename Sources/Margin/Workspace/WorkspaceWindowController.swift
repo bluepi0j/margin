@@ -21,6 +21,9 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
     private var treeShowsAllFiles = Preferences.shared.showAllFiles
     private var closeConfirmed = false
     private var isSwitchingEngine = false
+    private var autosaveInUse = Preferences.shared.autosave
+    /// Tabs whose close is in progress (a sheet may be up), so ⌘W twice doesn't queue two sheets.
+    private var closingTabs: Set<String> = []
 
     /// Called when the window closes so the app can drop it.
     var onClose: ((WorkspaceWindowController) -> Void)?
@@ -138,6 +141,12 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
 
     @objc private func preferencesChanged() {
         editor.applySettings()
+        // Autosave just switched on: write what's pending, or the "unsaved"
+        // dot would vanish with the text still only in memory.
+        if Preferences.shared.autosave, !autosaveInUse {
+            for tab in workspace.tabs where tab.unsavedText != nil && !tab.isMissing && !tab.hasConflict { write(tab) }
+        }
+        autosaveInUse = Preferences.shared.autosave
         if treeShowsAllFiles != Preferences.shared.showAllFiles {
             treeShowsAllFiles = Preferences.shared.showAllFiles
             reloadTree()
@@ -362,6 +371,9 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
     @discardableResult
     func closeTab(_ id: String) async -> Bool {
         guard let tab = workspace.tab(id: id) else { return true }
+        guard !closingTabs.contains(id) else { return false }
+        closingTabs.insert(id)
+        defer { closingTabs.remove(id) }
         guard await flushEditor() else { return false }
         if tab.isDraft {
             guard await resolveDraft(tab) else { return false }
@@ -405,12 +417,19 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
         }
     }
 
-    /// An "Untitled.md" made with ⌘N and closed without typing anything is removed again.
+    /// An "Untitled.md" made with ⌘N (or a draft) closed without typing anything is removed again.
     private func removeIfEmptyUntitledFile(_ tab: Tab) {
-        guard tab.autoName, let url = tab.url, url.lastPathComponent.hasPrefix("Untitled"),
+        guard let url = tab.url, tab.isDraft || (tab.autoName && url.lastPathComponent.hasPrefix("Untitled")),
               (tab.unsavedText ?? tab.diskText ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         try? FileManager.default.removeItem(at: url)
-        reloadTree()
+        if !tab.isDraft { reloadTree() }
+    }
+
+    /// Empty new files and drafts go away when the window closes or the app
+    /// quits. Called once every window has agreed to close, so a cancelled
+    /// quit doesn't leave tabs pointing at deleted files.
+    func removeEmptyUntitledFiles() {
+        for tab in workspace.tabs { removeIfEmptyUntitledFile(tab) }
     }
 
     private func remove(_ tab: Tab) {
@@ -431,9 +450,10 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
 
     /// Unsaved content in a tab that is about to close: save, discard or cancel.
     private func resolveUnsaved(_ tab: Tab) async -> Bool {
-        // With autosave on, a normal file just gets written.
-        if !tab.isUntitled, Preferences.shared.autosave, !tab.hasConflict, !tab.isMissing {
-            return write(tab)
+        // With autosave on, a normal file just gets written. If that keeps
+        // failing (a read-only file), the sheet below still offers a way out.
+        if !tab.isUntitled, Preferences.shared.autosave, !tab.hasConflict, !tab.isMissing, write(tab) {
+            return true
         }
         guard let window else { return false }
         select(tab.id)
@@ -468,9 +488,6 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
             }
             autoRename(tab)
         }
-        // Empty "Untitled.md" files made with ⌘N go away on close, not just
-        // when their own tab is closed.
-        for tab in workspace.tabs { removeIfEmptyUntitledFile(tab) }
         return true
     }
 
@@ -509,7 +526,12 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
             return false
         }
         guard await flushEditor() else { return false }
-        let text = tab.unsavedText ?? tab.diskText ?? ""
+        let original = tab.unsavedText ?? tab.diskText ?? ""
+        var text = original
+        if let draft = tab.url, Drafts.isDraft(draft) {
+            // Pasted images were saved next to the draft; take them along.
+            text = Drafts.relocateImages(in: text, from: draft.deletingLastPathComponent(), to: url.deletingLastPathComponent())
+        }
         do {
             try TextFile.write(text, to: url)
         } catch {
@@ -520,6 +542,7 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
            draft.standardizedFileURL.resolvingSymlinksInPath() != url.standardizedFileURL.resolvingSymlinksInPath() {
             try? FileManager.default.removeItem(at: draft)
         }
+        if text != original { editor.reload(id: tab.id, markdown: text) }
         tab.autoName = false
         tab.url = url.standardizedFileURL
         tab.untitledName = nil
@@ -569,12 +592,14 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
 
     /// Watches the folder plus the parent folders of open files outside it.
     private func rewatch() {
+        // Resolved paths: FSEvents reports real paths, so a folder opened
+        // through a symlink is compared resolved too (diskChanged).
         var paths = Set<String>()
-        if let folder = workspace.folder { paths.insert(folder.path) }
+        if let folder = workspace.folder { paths.insert(folder.resolvingSymlinksInPath().path) }
         for tab in workspace.tabs {
             guard let url = tab.url else { continue }
             if let folder = workspace.folder, url.isInside(folder) { continue }
-            paths.insert(url.deletingLastPathComponent().path)
+            paths.insert(url.deletingLastPathComponent().resolvingSymlinksInPath().path)
         }
         watcher = FileWatcher(paths: paths.sorted()) { [weak self] changed in
             self?.diskChanged(changed)
@@ -582,7 +607,7 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func diskChanged(_ paths: [String]) {
-        if let folder = workspace.folder?.canonicalPath,
+        if let folder = workspace.folder?.resolvingSymlinksInPath().canonicalPath,
            paths.contains(where: { URL(fileURLWithPath: $0).canonicalPath.hasPrefix(folder + "/") && !$0.contains("/.git/") }) {
             scheduleTreeReload()
         }
@@ -590,8 +615,10 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
         let changed = Set(paths.map { URL(fileURLWithPath: $0).canonicalPath })
         for tab in workspace.tabs {
             guard let url = tab.url else { continue }
-            if !changed.isEmpty, !changed.contains(url.canonicalPath),
-               !changed.contains(url.deletingLastPathComponent().canonicalPath) { continue }
+            // The folder is resolved on its own, in case the file itself is gone.
+            let dir = url.deletingLastPathComponent().resolvingSymlinksInPath()
+            if !changed.isEmpty, !changed.contains(dir.appendingPathComponent(url.lastPathComponent).canonicalPath),
+               !changed.contains(dir.canonicalPath) { continue }
             let exists = FileManager.default.fileExists(atPath: url.path)
             if !exists {
                 tab.isMissing = true
@@ -626,8 +653,9 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
             let tree = FileTreeLoader.load(root: folder, showAllFiles: showAll)
             await MainActor.run { [weak self] in
                 guard let self, self.workspace.folder == folder, self.treeReloadID == reloadID else { return }
+                // Not revealing the active file here: every autosave reloads the
+                // tree, and that would re-expand a folder the user just collapsed.
                 self.workspace.tree = tree
-                self.revealActiveInTree()
             }
         }
     }
@@ -758,11 +786,7 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
     /// How a document refers to an image: relative when the document is saved.
     private func imageReference(for image: URL) -> String {
         guard let dir = workspace.activeTab?.url?.deletingLastPathComponent() else { return image.absoluteString }
-        // Markdown link targets can't contain spaces or parentheses.
-        var allowed = CharacterSet.urlPathAllowed
-        allowed.remove(charactersIn: "()")
-        let path = image.relativePath(from: dir)
-        return path.addingPercentEncoding(withAllowedCharacters: allowed) ?? path
+        return image.markdownLinkPath(from: dir)
     }
 
     /// Pasting a screenshot saves it into `assets/` next to the document and
@@ -882,7 +906,11 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
                 tab.isMissing = false
                 editor.moved(id: tab.id, documentURL: tab.url)
             }
-            if workspace.expanded.remove(url.pathKey) != nil { workspace.expanded.insert(target.pathKey) }
+            // The renamed folder, and expanded folders inside it, stay expanded.
+            let oldKey = url.pathKey, newKey = target.pathKey
+            workspace.expanded = Set(workspace.expanded.map {
+                $0 == oldKey ? newKey : ($0.hasPrefix(oldKey + "/") ? newKey + $0.dropFirst(oldKey.count) : $0)
+            })
             reloadTree()
             updateTitle()
             rewatch()
@@ -896,17 +924,22 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
         alert.informativeText = url.isDirectoryOnDisk ? "Everything inside the folder goes with it." : "You can restore it from the Trash."
         alert.addButton(withTitle: "Move to Trash")
         alert.addButton(withTitle: "Cancel")
-        alert.beginSheetModal(for: window) { [weak self] response in
-            guard let self, response == .alertFirstButtonReturn else { return }
+        Task {
+            guard await alert.beginSheetModal(for: window) == .alertFirstButtonReturn else { return }
+            // Close its tabs first, the normal way (edits saved, or asked
+            // about), so what lands in the Trash is the latest text.
+            for tab in workspace.tabs where tab.url.map({ $0.isInside(url) }) == true {
+                await waitForSheetToClose()
+                guard await closeTab(tab.id) else { return }
+            }
+            // An empty Untitled.md goes away with its tab.
+            guard FileManager.default.fileExists(atPath: url.path) else { return reloadTree() }
             do {
                 try FileManager.default.trashItem(at: url, resultingItemURL: nil)
             } catch {
-                return self.showError(error)
+                return showError(error)
             }
-            for tab in self.workspace.tabs where tab.url.map({ $0.isInside(url) }) == true {
-                self.remove(tab)
-            }
-            self.reloadTree()
+            reloadTree()
         }
     }
 
@@ -1144,6 +1177,7 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
+        removeEmptyUntitledFiles()
         watcher = nil
         if let splitObserver {
             NotificationCenter.default.removeObserver(splitObserver)

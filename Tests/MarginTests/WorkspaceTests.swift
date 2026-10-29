@@ -133,6 +133,72 @@ final class WorkspaceTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: path))
         XCTAssertEqual(controller.sessionState.files, [path])
     }
+
+    // MARK: Review regressions
+
+    func testReloadingTheTreeDoesNotReexpandACollapsedFolder() async throws {
+        _ = NSApplication.shared
+        let folder = try temporaryFolder()
+        let sub = folder.appendingPathComponent("sub")
+        try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: true)
+        let file = sub.appendingPathComponent("a.md")
+        try TextFile.write("# A", to: file)
+        let controller = WorkspaceWindowController(folder: folder, editor: TestEditor())
+        controller.openFile(file)
+        XCTAssertTrue(controller.workspace.expanded.contains(sub.pathKey))
+        controller.workspace.expanded.remove(sub.pathKey)
+        controller.reloadTree()
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertFalse(controller.workspace.tree.isEmpty)
+        XCTAssertFalse(controller.workspace.expanded.contains(sub.pathKey))
+    }
+
+    func testTurningAutosaveOnWritesPendingEdits() async throws {
+        _ = NSApplication.shared
+        let previous = Preferences.shared.autosave
+        Preferences.shared.autosave = false
+        defer { Preferences.shared.autosave = previous }
+        let file = try temporaryFolder().appendingPathComponent("note.md")
+        try TextFile.write("original", to: file)
+        let editor = TestEditor()
+        let controller = WorkspaceWindowController(folder: nil, editor: editor)
+        controller.openFile(file)
+        let tab = try XCTUnwrap(controller.workspace.activeTab)
+        editor.edits[tab.id] = "edited"
+        await controller.flushEditor()
+        XCTAssertTrue(tab.isDirty)
+        Preferences.shared.autosave = true
+        XCTAssertEqual(try TextFile.read(file).text, "edited")
+        XCTAssertNil(tab.unsavedText)
+        XCTAssertFalse(tab.isDirty)
+    }
+
+    func testEmptyNewFileGoesOnlyOnceEveryWindowAgreedToClose() async throws {
+        _ = NSApplication.shared
+        let controller = WorkspaceWindowController(folder: try temporaryFolder(), editor: TestEditor())
+        controller.newUntitled()
+        let url = try XCTUnwrap(controller.workspace.activeTab?.url)
+        let canQuit = await controller.prepareToClose(quitting: true)
+        XCTAssertTrue(canQuit)
+        // Another window may still cancel the quit: the file stays until then.
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
+        controller.removeEmptyUntitledFiles()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+    }
+
+    func testEmptyDraftIsRemovedWhenQuitting() async throws {
+        _ = NSApplication.shared
+        let previousFolder = Drafts.folder
+        Drafts.folder = try temporaryFolder()
+        defer { Drafts.folder = previousFolder }
+        let controller = WorkspaceWindowController(folder: nil, editor: TestEditor())
+        controller.newUntitled()
+        let url = try XCTUnwrap(controller.workspace.activeTab?.url)
+        let canQuit = await controller.prepareToClose(quitting: true)
+        XCTAssertTrue(canQuit)
+        controller.removeEmptyUntitledFiles()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+    }
 }
 
 @MainActor
