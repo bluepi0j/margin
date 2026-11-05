@@ -25,9 +25,10 @@ enum NativeFindBarLayout {
         rawSourceMode: Bool,
         headingCount: Int,
         viewportWidth: CGFloat,
-        readingWidth: CGFloat
+        readingWidth: CGFloat,
+        railIsVisible: Bool = false
     ) -> CGFloat {
-        isRailVisible(
+        railIsVisible || isRailVisible(
             showsRail: showsRail,
             rawSourceMode: rawSourceMode,
             headingCount: headingCount,

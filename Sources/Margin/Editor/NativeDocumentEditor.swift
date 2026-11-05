@@ -28,6 +28,7 @@ final class NativeDocumentEditor: DocumentEditor {
     private var findCurrentIndex: Int?
     private var lastPostedFindIndex: Int?
     private var lastPostedFindRanges: [NSRange] = []
+    private var railIsVisible = false
     private var findNeedsRefreshAfterDocumentChange = false
     private var findQueryWorkItem: DispatchWorkItem?
     private let findNotifications = NativeFindNotifications()
@@ -333,7 +334,8 @@ final class NativeDocumentEditor: DocumentEditor {
             rawSourceMode: model.rawSource,
             headingCount: model.railHeadings.count,
             viewportWidth: viewportWidth,
-            readingWidth: CGFloat(model.readingWidth)
+            readingWidth: CGFloat(model.readingWidth),
+            railIsVisible: railIsVisible
         )
         guard container.isFindBarVisible else {
             clearFindHighlights()
@@ -350,7 +352,8 @@ final class NativeDocumentEditor: DocumentEditor {
         }
     }
 
-    fileprivate func railVisibilityDidChange(_: Bool) {
+    fileprivate func railVisibilityDidChange(_ visible: Bool) {
+        railIsVisible = visible
         updateFindBarLayout()
     }
 

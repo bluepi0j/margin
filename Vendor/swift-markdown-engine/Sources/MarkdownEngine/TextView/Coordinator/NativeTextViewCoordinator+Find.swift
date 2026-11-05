@@ -202,33 +202,10 @@ extension NativeTextViewCoordinator {
         guard allRanges.indices.contains(currentIndex) else { return }
         let range = allRanges[currentIndex]
         guard range.location + range.length <= fullRange.length else { return }
-        // Scroll via TextKit 2 fragment layout, which works whether or not the
-        // reading column is active. `scrollRangeToVisible` is unreliable for
-        // off-screen content in a TextKit 2 text view (it routes through the
-        // absent TextKit 1 layout manager), so it's only the last-resort fallback.
-        guard let tlm = tv.textLayoutManager,
-              let scrollView = tv.enclosingScrollView,
-              let matchStart = tlm.textContentManager?.location(tlm.documentRange.location, offsetBy: range.location) else {
-            tv.scrollRangeToVisible(range)
-            return
-        }
-        tlm.enumerateTextLayoutFragments(from: matchStart, options: [.ensuresLayout]) { fragment in
-            let cv = scrollView.contentView
-            let insetsTop = scrollView.contentInsets.top
-            // Fragment frames are text-view-local; the scroll offset is in the clip view's space.
-            let frame = tv.rectInClipView(fragment.layoutFragmentFrame)
-            let visibleTop = cv.bounds.origin.y + insetsTop
-            let visibleBottom = cv.bounds.origin.y + cv.bounds.height
-            // Only scroll when the match is off-screen; reveal it a little below the top.
-            if frame.minY < visibleTop || frame.maxY > visibleBottom {
-                let targetY = frame.minY - insetsTop - cv.bounds.height * 0.2
-                (scrollView as? ClampedScrollView)?.cancelPendingScrollRestore()
-                cv.scroll(to: NSPoint(x: cv.bounds.origin.x, y: targetY))
-                scrollView.reflectScrolledClipView(cv)
-                (scrollView as? ClampedScrollView)?.clampToInsets()
-            }
-            return false
-        }
+        // Use the editor's TextKit 2 reveal path. Layout fragments can carry
+        // estimate-only heights until their prefix settles; scrolling from the
+        // first matching fragment therefore leaves distant results off-screen.
+        tv.scrollRangeToVisible(range)
     }
 
     @objc func handleFindClearHighlights(_ notification: Notification) {

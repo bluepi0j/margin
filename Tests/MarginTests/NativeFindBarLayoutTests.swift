@@ -15,6 +15,20 @@ final class NativeFindBarLayoutTests: XCTestCase {
         )
     }
 
+    func testFindBarUsesRenderedRailStateWhenLayoutEstimateDisagrees() {
+        XCTAssertEqual(
+            NativeFindBarLayout.leadingInset(
+                showsRail: true,
+                rawSourceMode: false,
+                headingCount: 4,
+                viewportWidth: 900,
+                readingWidth: 820,
+                railIsVisible: true
+            ),
+            84
+        )
+    }
+
     func testFindBarUsesPlainInsetWhenRailIsHidden() {
         XCTAssertEqual(
             NativeFindBarLayout.leadingInset(
