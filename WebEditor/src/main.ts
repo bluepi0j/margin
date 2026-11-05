@@ -385,7 +385,27 @@ document.addEventListener('mousedown', e => {
 })
 
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape' && findBar.isOpen) findBar.close()
+  if (e.key === 'Escape' && findBar.isOpen) {
+    findBar.close()
+    return
+  }
+
+  // AppKit normally routes these through Margin's menu, but WKWebView claims
+  // the standard find commands first. Handle them in the page so every
+  // document uses the same find bar as clicks in Edit → Find.
+  const command = e.metaKey && !e.ctrlKey
+  const key = e.key.toLowerCase()
+  const isFind = command && key === 'f' && !e.shiftKey
+  const isFindNext = command && !e.altKey && key === 'g'
+  if (!isFind && !isFindNext) return
+  if (!activeId) return
+  e.preventDefault()
+  e.stopPropagation()
+  if (sourceMode) return
+  if (key === 'f' && e.altKey) findBar.open(true)
+  else if (key === 'f') findBar.open()
+  else if (e.shiftKey) findBar.previous()
+  else findBar.next()
 })
 
 // Links show a hand cursor only while ⌘ is held, since ⌘-click opens them.

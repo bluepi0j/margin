@@ -54,6 +54,21 @@ test('find and replace keeps positions after Unicode case expansion', () => {
   margin.close('unicode-find')
 })
 
+test('command-F opens the page find bar before WebKit handles it', () => {
+  margin.open('keyboard-find', 'Alpha beta\n', '', true)
+  const event = new window.KeyboardEvent('keydown', {
+    key: 'f', metaKey: true, bubbles: true, cancelable: true,
+  })
+  document.dispatchEvent(event)
+  assert.equal(event.defaultPrevented, true)
+  assert.equal(document.querySelector('.find-bar').hidden, false)
+  document.dispatchEvent(new window.KeyboardEvent('keydown', {
+    key: 'Escape', bubbles: true, cancelable: true,
+  }))
+  assert.equal(document.querySelector('.find-bar').hidden, true)
+  margin.close('keyboard-find')
+})
+
 test('each tab keeps its own document', () => {
   margin.open('a', '# A\n', '', true)
   margin.open('b', '# B\n', '', true)

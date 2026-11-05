@@ -753,11 +753,20 @@ body.cmd-held .prose a {
   z-index: 25;
   top: 10px;
   right: 14px;
+  box-sizing: border-box;
+  max-width: calc(100vw - 28px);
   border-radius: 10px;
   padding: 6px;
   display: flex;
   flex-direction: column;
   gap: 5px;
+}
+
+/* The outline is an editor overlay. Reserve the same 84pt left edge used by
+   the native find bar so a narrower window can never put the field underneath
+   its ticks. */
+html[data-rail-visible="true"] .find-bar {
+  max-width: calc(100vw - 98px);
 }
 
 .find-bar[hidden] {
@@ -767,6 +776,7 @@ body.cmd-held .prose a {
 .find-row {
   display: flex;
   align-items: center;
+  min-width: 0;
   gap: 3px;
 }
 
@@ -775,7 +785,9 @@ body.cmd-held .prose a {
 }
 
 .find-bar input {
+  flex: 1 1 200px;
   width: 200px;
+  min-width: 90px;
   font: 13px var(--font-text);
   color: var(--text);
   background: var(--bg);
@@ -794,6 +806,7 @@ body.cmd-held .prose a {
 }
 
 .find-count {
+  flex: none;
   min-width: 64px;
   font-size: 11px;
   color: var(--text-secondary);
@@ -802,6 +815,7 @@ body.cmd-held .prose a {
 }
 
 .find-bar button {
+  flex: none;
   font: 13px var(--font-text);
   color: var(--text);
   background: transparent;

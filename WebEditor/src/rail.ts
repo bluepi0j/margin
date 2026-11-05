@@ -70,6 +70,7 @@ export class OutlineRail {
     })
     window.addEventListener('scroll', () => this.scheduleTrack(), { passive: true })
     window.addEventListener('resize', () => this.rebuild())
+    this.setVisible(false)
   }
 
   /** Re-reads the headings; call after the document or the tab changes. */
@@ -87,7 +88,7 @@ export class OutlineRail {
     this.rows = []
     this.headingTops = []
     if (this.headings.length < 3 || gutter < MIN_GUTTER) {
-      this.root.hidden = true
+      this.setVisible(false)
       this.card.classList.remove('is-visible')
       return
     }
@@ -95,7 +96,7 @@ export class OutlineRail {
     // every DOM heading on every frame. ResizeObserver below refreshes the
     // cache when images, diagrams, or other async content change the page.
     this.measureHeadingTops()
-    this.root.hidden = false
+    this.setVisible(true)
     const rowCount = this.headings.length * 2 - 1
     const pitch = Math.min(PITCH[1], Math.max(PITCH[0], (window.innerHeight * SPAN) / rowCount))
     this.root.style.setProperty('--rail-row', `${pitch}px`)
@@ -104,6 +105,12 @@ export class OutlineRail {
       if (i < this.headings.length - 1) this.add(i, true, 0)
     })
     this.track()
+  }
+
+  private setVisible(visible: boolean) {
+    this.root.hidden = !visible
+    document.documentElement.dataset.railVisible = String(visible)
+    if (!visible) this.card.classList.remove('is-visible')
   }
 
   private observe(page: HTMLElement | null) {

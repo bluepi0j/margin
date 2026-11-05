@@ -143,6 +143,12 @@ export class FindBar {
       else if (act === 'replace') this.replace()
       else if (act === 'replace-all') this.replaceAll()
     })
+    this.getEditor().on('update', ({ transaction }) => {
+      // ProseMirror rebuilds the highlight decorations on document changes,
+      // but the count is HTML outside plugin state. Keep it in lockstep with
+      // typing and undo so it cannot describe the previous document.
+      if (!this.el.hidden && transaction.docChanged) this.updateCount()
+    })
   }
 
   get isOpen() {

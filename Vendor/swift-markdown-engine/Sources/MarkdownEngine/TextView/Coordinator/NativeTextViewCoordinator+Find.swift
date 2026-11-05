@@ -164,6 +164,7 @@ extension NativeTextViewCoordinator {
 
         for range in highlighted {
             storage.removeAttribute(.backgroundColor, range: range)
+            storage.removeAttribute(.foregroundColor, range: range)
             storage.removeAttribute(.findHighlight, range: range)
         }
         // Raw source mode has no styling to restore; restyleParagraphs no-ops there.
@@ -188,11 +189,13 @@ extension NativeTextViewCoordinator {
             guard matchRange.location + matchRange.length <= fullRange.length else { continue }
             let color = (i == currentIndex) ? currentHighlightColor : highlightColor
             storage?.addAttribute(.backgroundColor, value: color, range: matchRange)
+            // The current match is also selected while the search field keeps
+            // focus. AppKit can leave it with selected-text (white) ink, which
+            // disappears against the yellow find background. Use a contrasting
+            // ink for the duration of the highlight; clearing restyles the
+            // original Markdown attributes.
+            storage?.addAttribute(.foregroundColor, value: NSColor.black, range: matchRange)
             storage?.addAttribute(.findHighlight, value: true, range: matchRange)
-        }
-
-        if let tlm = tv.textLayoutManager {
-            tlm.ensureLayout(for: tlm.documentRange)
         }
 
         // Scroll the current match into view.
@@ -248,9 +251,6 @@ extension NativeTextViewCoordinator {
         }
 
         clearFindHighlights(in: tv)
-        if let tlm = tv.textLayoutManager {
-            tlm.ensureLayout(for: tlm.documentRange)
-        }
 
         if let tlm = tv.textLayoutManager, let anchor = anchorTextRange {
             tlm.enumerateTextLayoutFragments(from: anchor.location, options: [.ensuresLayout]) { fragment in

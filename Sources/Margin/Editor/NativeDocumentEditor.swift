@@ -22,6 +22,16 @@ final class NativeDocumentEditor: DocumentEditor {
     private var infoTimer: Timer?
     private var lastSelection = EditorSelection()
     private weak var cachedTextView: NSTextView?
+    private var findBarContainer: NativeFindBarContainer?
+    private var findMatchRanges: [NSRange] = []
+    private var findMatchQuery = ""
+    private var findCurrentIndex: Int?
+    private var lastPostedFindIndex: Int?
+    private var lastPostedFindRanges: [NSRange] = []
+    private var findNeedsRefreshAfterDocumentChange = false
+    private var findQueryWorkItem: DispatchWorkItem?
+    private var findRailIsVisible = false
+    private let findNotifications = NativeFindNotifications()
     private var selectionObserver: NSObjectProtocol?
     private var scrollObserver: NSObjectProtocol?
     private var appearance = Preferences.shared.appearance
@@ -37,15 +47,36 @@ final class NativeDocumentEditor: DocumentEditor {
     init() {
         applySettings()
         DispatchQueue.main.async { [weak self] in self?.onEvent?(.ready) }
-        // Tab / ⇧Tab in a table: move between cells instead of typing a tab.
+        // NSTextView consumes ⌘F/⌘G before the menu bar gets a chance to route
+        // them to Margin, which would bring back AppKit's dimmed find overlay.
+        // Route those commands to our host-owned bar while this editor's window
+        // is active. Keep the table Tab handling in the same monitor.
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard event.keyCode == 48, event.modifierFlags.intersection([.command, .option, .control]).isEmpty,
-                  let self, self.moveInTable(forward: !event.modifierFlags.contains(.shift), window: event.window) else { return event }
+            guard let self, event.window === self.model.hostView?.window else { return event }
+            let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            if event.keyCode == 53, self.findBarContainer?.isFindBarVisible == true {
+                self.closeFind()
+                return nil
+            }
+            if modifiers.contains(.command), !modifiers.contains(.control),
+               let key = event.charactersIgnoringModifiers?.lowercased() {
+                if key == "f", !modifiers.contains(.shift) {
+                    self.find(modifiers.contains(.option) ? "replace" : "open")
+                    return nil
+                }
+                if key == "g", !modifiers.contains(.option) {
+                    self.find(modifiers.contains(.shift) ? "previous" : "next")
+                    return nil
+                }
+            }
+            guard event.keyCode == 48, modifiers.intersection([.command, .option, .control]).isEmpty,
+                  self.moveInTable(forward: !modifiers.contains(.shift), window: event.window) else { return event }
             return nil
         }
     }
 
     deinit {
+        findQueryWorkItem?.cancel()
         if let selectionObserver { NotificationCenter.default.removeObserver(selectionObserver) }
         if let scrollObserver { NotificationCenter.default.removeObserver(scrollObserver) }
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
@@ -68,6 +99,9 @@ final class NativeDocumentEditor: DocumentEditor {
     func activate(id: String) {
         guard let text = texts[id] else { return }
         if let current = model.documentId, pending.contains(current) { postContent(current) }
+        lastPostedFindIndex = nil
+        lastPostedFindRanges = []
+        findNeedsRefreshAfterDocumentChange = true
         images.base = urls[id]?.deletingLastPathComponent()
         model.documentId = id
         model.text = text
@@ -94,6 +128,7 @@ final class NativeDocumentEditor: DocumentEditor {
         let caret = tv.map { MarkdownEditing.mapLocation($0.selectedRange().location, from: old, to: markdown) }
         let origin = tv?.enclosingScrollView?.contentView.bounds.origin
         model.text = markdown
+        findNeedsRefreshAfterDocumentChange = true
         // Put the caret (moved along with the edit) and the scroll position back
         // once the engine has re-laid out.
         DispatchQueue.main.async {
@@ -123,6 +158,7 @@ final class NativeDocumentEditor: DocumentEditor {
             MainActor.assumeIsolated { _ = self?.flushNow() }
         }
         scheduleInfo()
+        findNeedsRefreshAfterDocumentChange = true
     }
 
     private func postContent(_ id: String) {
@@ -152,8 +188,28 @@ final class NativeDocumentEditor: DocumentEditor {
         let found = Self.findTextView(in: root)
         cachedTextView = found
         if let found {
-            found.usesFindBar = true
-            found.isIncrementalSearchingEnabled = true
+            found.usesFindBar = false
+            let scrollView = found.enclosingScrollView
+            if let scrollView {
+                let container = NativeFindBarContainer(scrollView: scrollView)
+                container.onLayoutChange = { [weak self] in
+                    self?.scheduleFindBarLayoutUpdate()
+                }
+                container.onQueryChange = { [weak self] query in
+                    self?.scheduleFindQuery(query)
+                }
+                container.onNext = { [weak self] in self?.stepFind(1) }
+                container.onPrevious = { [weak self] in self?.stepFind(-1) }
+                container.onClose = { [weak self] in self?.closeFind() }
+                container.onReplace = { [weak self] replacement in
+                    self?.replaceCurrentFindMatch(with: replacement)
+                }
+                container.onReplaceAll = { [weak self] replacement in
+                    self?.replaceAllFindMatches(with: replacement)
+                }
+                scrollView.addSubview(container, positioned: .above, relativeTo: scrollView.contentView)
+                findBarContainer = container
+            }
             if let selectionObserver { NotificationCenter.default.removeObserver(selectionObserver) }
             selectionObserver = NotificationCenter.default.addObserver(
                 forName: NSTextView.didChangeSelectionNotification, object: found, queue: .main
@@ -198,6 +254,7 @@ final class NativeDocumentEditor: DocumentEditor {
             lastSelection = sel
             onEvent?(.selection(sel))
         }
+        refreshFindHighlightSelection()
         let context = BlockChipContext(
             storageLength: tv.textStorage?.length ?? (text as NSString).length,
             caret: caret,
@@ -257,6 +314,244 @@ final class NativeDocumentEditor: DocumentEditor {
         var point = tv.convert(NSPoint(x: tv.textContainerOrigin.x + width - 16, y: y + 6), to: scroll)
         if !scroll.isFlipped { point.y = scroll.bounds.height - point.y }
         setChip(NativeEditorModel.BlockChip(kind: kind, trailing: point.x, top: point.y))
+    }
+
+    private func updateFindBarLayout() {
+        guard let container = findBarContainer else { return }
+        // Compute the rail's visibility from the same values SwiftUI uses. A
+        // geometry callback can briefly report the previous document's state
+        // while a large outline lands, which clips the find field's left edge.
+        container.leadingInset = NativeFindBarLayout.leadingInset(railVisible: findRailIsVisible)
+        guard container.isFindBarVisible else {
+            clearFindHighlights()
+            return
+        }
+
+        container.needsLayout = true
+        container.layoutSubtreeIfNeeded()
+    }
+
+    fileprivate func scheduleFindBarLayoutUpdate() {
+        DispatchQueue.main.async { [weak self] in
+            self?.updateFindBarLayout()
+        }
+    }
+
+    fileprivate func railVisibilityDidChange(_ visible: Bool) {
+        guard findRailIsVisible != visible else { return }
+        findRailIsVisible = visible
+        updateFindBarLayout()
+    }
+
+    private func refreshFindAfterDocumentChange() {
+        guard let bar = findBarContainer, bar.isFindBarVisible else { return }
+        // Rebuilding Markdown styling replaces the storage attributes, including
+        // the find backgrounds. Force a fresh post even when the ranges did not
+        // change, otherwise postFindHighlights sees identical cached ranges and
+        // leaves every match visually unhighlighted.
+        lastPostedFindIndex = nil
+        lastPostedFindRanges = []
+        setFindQuery(bar.query, preferredIndex: nil)
+    }
+
+    private static func findRanges(in text: NSString, query: String) -> [NSRange] {
+        guard !query.isEmpty else { return [] }
+        var ranges: [NSRange] = []
+        var searchStart = 0
+        let options: NSString.CompareOptions = [.caseInsensitive, .diacriticInsensitive]
+        while searchStart < text.length {
+            let scope = NSRange(location: searchStart, length: text.length - searchStart)
+            let found = text.range(of: query, options: options, range: scope)
+            if found.location == NSNotFound { break }
+            ranges.append(found)
+            searchStart = NSMaxRange(found) + (found.length == 0 ? 1 : 0)
+        }
+        return ranges
+    }
+
+    private func scheduleFindQuery(_ query: String) {
+        findQueryWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.findQueryWorkItem = nil
+            self.setFindQuery(query, preferredIndex: nil)
+        }
+        findQueryWorkItem = work
+        // A common prefix such as "A" can match thousands of paragraphs in a
+        // large note. Re-highlighting every intermediate prefix makes the main
+        // thread look hung, so style only the query left after typing settles.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: work)
+    }
+
+    private func setFindQuery(_ query: String, preferredIndex: Int?) {
+        findQueryWorkItem?.cancel()
+        findQueryWorkItem = nil
+        findMatchQuery = query
+        guard let tv = textView, let bar = findBarContainer else { return }
+        let text = tv.string as NSString
+        findMatchRanges = Self.findRanges(in: text, query: query)
+
+        if findMatchRanges.isEmpty {
+            findCurrentIndex = nil
+            bar.setResultCount(nil)
+            clearFindHighlights()
+            return
+        }
+
+        let caret = tv.selectedRange().location
+        let nearest = findMatchRanges.indices.min {
+            let lhs = abs(findMatchRanges[$0].location - caret)
+            let rhs = abs(findMatchRanges[$1].location - caret)
+            return lhs < rhs
+        } ?? 0
+        let requested = preferredIndex ?? findCurrentIndex ?? nearest
+        findCurrentIndex = min(max(requested, 0), findMatchRanges.count - 1)
+        bar.setResultCount(findMatchRanges.count > 0 ? (findCurrentIndex! + 1, findMatchRanges.count) : nil)
+        postFindHighlights()
+    }
+
+    private func postFindHighlights() {
+        guard findBarContainer?.isFindBarVisible == true,
+              let index = findCurrentIndex,
+              findMatchRanges.indices.contains(index) else {
+            clearFindHighlights()
+            return
+        }
+        if index == lastPostedFindIndex, findMatchRanges == lastPostedFindRanges { return }
+        lastPostedFindIndex = index
+        lastPostedFindRanges = findMatchRanges
+        NotificationCenter.default.post(
+            name: findNotifications.scrollToRange,
+            object: nil,
+            userInfo: ["allRanges": findMatchRanges, "currentIndex": index]
+        )
+    }
+
+    private func refreshFindHighlightSelection() {
+        guard findBarContainer?.isFindBarVisible == true, let tv = textView,
+              !findMatchRanges.isEmpty else {
+            clearFindHighlights()
+            return
+        }
+        let selected = tv.selectedRange()
+        let currentIndex = findMatchRanges.firstIndex(of: selected) ?? findMatchRanges.indices.min {
+            let lhs = findMatchRanges[$0]
+            let rhs = findMatchRanges[$1]
+            let lhsDistance = abs(lhs.location + lhs.length / 2 - selected.location)
+            let rhsDistance = abs(rhs.location + rhs.length / 2 - selected.location)
+            return lhsDistance < rhsDistance
+        } ?? 0
+        findCurrentIndex = currentIndex
+        findBarContainer?.setResultCount((currentIndex + 1, findMatchRanges.count))
+        postFindHighlights()
+    }
+
+    private func clearFindHighlights() {
+        guard lastPostedFindIndex != nil else { return }
+        lastPostedFindIndex = nil
+        lastPostedFindRanges = []
+        NotificationCenter.default.post(name: findNotifications.clearHighlights, object: nil)
+    }
+
+    private func stepFind(_ delta: Int) {
+        guard let bar = findBarContainer else { return }
+        if !bar.isFindBarVisible {
+            showFind(replace: false)
+            return
+        }
+        if bar.query != findMatchQuery {
+            setFindQuery(bar.query, preferredIndex: nil)
+            return
+        }
+        if findMatchRanges.isEmpty {
+            setFindQuery(bar.query, preferredIndex: nil)
+        }
+        guard !findMatchRanges.isEmpty else { return }
+        let current = findCurrentIndex ?? (delta > 0 ? -1 : 0)
+        findCurrentIndex = (current + delta + findMatchRanges.count) % findMatchRanges.count
+        bar.setResultCount((findCurrentIndex! + 1, findMatchRanges.count))
+        postFindHighlights()
+    }
+
+    private func showFind(replace: Bool) {
+        guard let tv = textView, let bar = findBarContainer else { return }
+        if !replace,
+           let selected = selectedFindText(in: tv) {
+            bar.query = selected
+        }
+        bar.setReplaceVisible(replace || bar.showsReplace)
+        bar.isFindBarVisible = true
+        scheduleFindBarLayoutUpdate()
+        setFindQuery(bar.query, preferredIndex: nil)
+        bar.focusSearch()
+    }
+
+    private func closeFind() {
+        guard let bar = findBarContainer else { return }
+        findQueryWorkItem?.cancel()
+        findQueryWorkItem = nil
+        bar.isFindBarVisible = false
+        findCurrentIndex = nil
+        findMatchRanges = []
+        findMatchQuery = ""
+        bar.setResultCount(nil)
+        clearFindHighlights()
+        scheduleFindBarLayoutUpdate()
+        textView?.window?.makeFirstResponder(textView)
+    }
+
+    private func selectedFindText(in textView: NSTextView) -> String? {
+        let selection = textView.selectedRange()
+        guard selection.location != NSNotFound, selection.length > 0,
+              NSMaxRange(selection) <= (textView.string as NSString).length else { return nil }
+        let selected = (textView.string as NSString).substring(with: selection)
+        guard !selected.contains("\n"), !selected.contains("\r") else { return nil }
+        return selected
+    }
+
+    private func replaceCurrentFindMatch(with replacement: String) {
+        guard let tv = textView, let index = findCurrentIndex,
+              findMatchRanges.indices.contains(index) else { return }
+        guard findBarContainer?.query == findMatchQuery else {
+            setFindQuery(findBarContainer?.query ?? "", preferredIndex: nil)
+            return
+        }
+        let target = findMatchRanges[index]
+        guard NSMaxRange(target) <= (tv.string as NSString).length else { return }
+        tv.breakUndoCoalescing()
+        guard tv.shouldChangeText(in: target, replacementString: replacement) else { return }
+        tv.replaceCharacters(in: target, with: replacement)
+        tv.didChangeText()
+        tv.undoManager?.setActionName("Replace")
+        tv.breakUndoCoalescing()
+
+        findNeedsRefreshAfterDocumentChange = false
+        setFindQuery(findBarContainer?.query ?? "", preferredIndex: index)
+        findBarContainer?.focusReplace()
+    }
+
+    private func replaceAllFindMatches(with replacement: String) {
+        guard let tv = textView, !findMatchRanges.isEmpty else { return }
+        guard findBarContainer?.query == findMatchQuery else {
+            setFindQuery(findBarContainer?.query ?? "", preferredIndex: nil)
+            return
+        }
+        let ranges = findMatchRanges.reversed().map { NSValue(range: $0) }
+        let replacements = Array(repeating: replacement, count: findMatchRanges.count)
+        tv.breakUndoCoalescing()
+        guard tv.shouldChangeText(inRanges: ranges, replacementStrings: replacements) else { return }
+        tv.textStorage?.beginEditing()
+        for range in findMatchRanges.reversed() {
+            tv.textStorage?.replaceCharacters(in: range, with: replacement)
+        }
+        tv.textStorage?.endEditing()
+        tv.didChangeText()
+        tv.undoManager?.setActionName("Replace All")
+        tv.breakUndoCoalescing()
+
+        findNeedsRefreshAfterDocumentChange = false
+        setFindQuery(findBarContainer?.query ?? "", preferredIndex: 0)
+        findBarContainer?.focusReplace()
     }
 
     private func setChip(_ chip: NativeEditorModel.BlockChip?) {
@@ -360,22 +655,35 @@ final class NativeDocumentEditor: DocumentEditor {
 
     func setSourceMode(_ on: Bool) {
         model.rawSource = on
+        findNeedsRefreshAfterDocumentChange = true
+        scheduleInfo()
+        scheduleFindBarLayoutUpdate()
         lastSelection.sourceMode = on
         onEvent?(.selection(lastSelection))
     }
 
     func find(_ mode: String) {
-        guard let tv = textView else { return }
-        let action: NSTextFinder.Action = switch mode {
-        case "replace": .showReplaceInterface
-        case "next": .nextMatch
-        case "previous": .previousMatch
-        default: .showFindInterface
+        guard model.documentId != nil, textView != nil, findBarContainer != nil else {
+            NSSound.beep()
+            return
         }
-        let item = NSMenuItem()
-        item.tag = action.rawValue
-        tv.window?.makeFirstResponder(tv)
-        tv.performTextFinderAction(item)
+        switch mode {
+        case "replace":
+            showFind(replace: true)
+        case "next":
+            stepFind(1)
+        case "previous":
+            stepFind(-1)
+        default:
+            showFind(replace: false)
+        }
+    }
+
+    fileprivate var findBus: MarkdownEditorBus {
+        MarkdownEditorBus(
+            findScrollToRange: findNotifications.scrollToRange,
+            findClearHighlights: findNotifications.clearHighlights
+        )
     }
 
     func applySettings() {
@@ -384,6 +692,7 @@ final class NativeDocumentEditor: DocumentEditor {
         model.readingWidth = prefs.contentWidth
         model.fontName = prefs.fontStyle.fontName
         model.showsRail = prefs.showOutlineRail
+        scheduleFindBarLayoutUpdate()
         // The highlighter only hears about the system's appearance; tell it
         // when Margin's own setting flips light/dark so code is re-colored.
         if prefs.appearance != appearance {
@@ -437,6 +746,10 @@ final class NativeDocumentEditor: DocumentEditor {
         onEvent?(.outline(items, words: words))
         updateRail(text)
         updateBlockChip()
+        if findNeedsRefreshAfterDocumentChange {
+            findNeedsRefreshAfterDocumentChange = false
+            refreshFindAfterDocumentChange()
+        }
     }
 
     // MARK: Outline rail
@@ -455,7 +768,10 @@ final class NativeDocumentEditor: DocumentEditor {
             return RailHeading(level: h.level, title: h.text, preview: String(preview.prefix(180)), location: h.location,
                                percent: ns.length == 0 ? 0 : h.location * 100 / ns.length)
         }
-        if model.railHeadings != rail { model.railHeadings = rail }
+        if model.railHeadings != rail {
+            model.railHeadings = rail
+            scheduleFindBarLayoutUpdate()
+        }
         trackRail()
     }
 
@@ -578,10 +894,17 @@ private struct NativeEditorView: View {
             GeometryReader { geo in
                 // Only where the margin beside the text has room for it.
                 let gutter = (geo.size.width - min(model.readingWidth, geo.size.width)) / 2
-                if model.showsRail, !model.rawSource, model.railHeadings.count >= 3, gutter >= 64 {
-                    OutlineRailView(headings: model.railHeadings, current: model.railCurrent) { index, animated in
-                        editor.jumpToRailHeading(index, animated: animated)
+                let railVisible = model.showsRail && !model.rawSource &&
+                    model.railHeadings.count >= 3 && gutter >= 64
+                Group {
+                    if railVisible {
+                        OutlineRailView(headings: model.railHeadings, current: model.railCurrent) { index, animated in
+                            editor.jumpToRailHeading(index, animated: animated)
+                        }
                     }
+                }
+                .onChange(of: railVisible, initial: true) { _, visible in
+                    editor.railVisibilityDidChange(visible)
                 }
             }
         }
@@ -591,7 +914,7 @@ private struct NativeEditorView: View {
     private var configuration: MarkdownEditorConfiguration {
         var c = MarkdownEditorConfiguration(
             services: MarkdownEditorServices(images: editor.images, syntaxHighlighter: Self.highlighter, latex: Self.latex,
-                                             codeBlockRenderer: Self.mermaid),
+                                             codeBlockRenderer: Self.mermaid, bus: editor.findBus),
             safeAreaInsets: SafeAreaInsets(top: 28, bottom: 40),
             readingWidth: model.readingWidth,
             rawSourceMode: model.rawSource,
@@ -689,15 +1012,293 @@ private struct CodeLanguageMenu: View {
     }
 }
 
+private struct NativeFindNotifications {
+    let scrollToRange = Notification.Name("Margin.nativeFind.scroll.\(UUID().uuidString)")
+    let clearHighlights = Notification.Name("Margin.nativeFind.clear.\(UUID().uuidString)")
+}
+
 /// Reports the NSView it is attached to (to locate the engine's text view).
 private struct HostViewReader: NSViewRepresentable {
     let onAttach: (NSView) -> Void
     func makeNSView(context: Context) -> NSView {
         let v = NSView()
-        DispatchQueue.main.async { if let s = v.superview?.superview { onAttach(s) } }
+        func attach(attempt: Int) {
+            DispatchQueue.main.async {
+                if let root = v.window?.contentView ?? v.superview?.superview {
+                    onAttach(root)
+                } else if attempt > 0 {
+                    attach(attempt: attempt - 1)
+                }
+            }
+        }
+        attach(attempt: 3)
         return v
     }
     func updateNSView(_ nsView: NSView, context: Context) {}
+}
+
+/// A host-owned find bar. AppKit's NSTextFinder installs a separate content
+/// dimmer and its result rectangles do not respect the editor's outline rail;
+/// owning the controls keeps both concerns in the same coordinate system.
+private final class NativeFindBarContainer: NSView, NSSearchFieldDelegate {
+    weak var scrollView: NSScrollView?
+    private let searchField = NSSearchField()
+    private let resultLabel = NSTextField(labelWithString: "")
+    private let previousButton = NSButton()
+    private let nextButton = NSButton()
+    private let doneButton = NSButton(title: "Done", target: nil, action: nil)
+    private let replaceToggle = NSButton(checkboxWithTitle: "Replace", target: nil, action: nil)
+    private let replaceField = NSTextField()
+    private let replaceButton = NSButton(title: "Replace", target: nil, action: nil)
+    private let replaceAllButton = NSButton(title: "All", target: nil, action: nil)
+
+    var onLayoutChange: (() -> Void)?
+    var onQueryChange: ((String) -> Void)?
+    var onNext: (() -> Void)?
+    var onPrevious: (() -> Void)?
+    var onClose: (() -> Void)?
+    var onReplace: ((String) -> Void)?
+    var onReplaceAll: ((String) -> Void)?
+
+    var leadingInset = NativeFindBarLayout.railLeadingInset {
+        didSet {
+            guard leadingInset != oldValue else { return }
+            needsLayout = true
+        }
+    }
+
+    var query: String {
+        get { searchField.stringValue }
+        set { searchField.stringValue = newValue }
+    }
+
+    var showsReplace: Bool { !replaceField.isHidden }
+
+    var isFindBarVisible = false {
+        didSet {
+            isHidden = !isFindBarVisible
+            needsLayout = true
+            onLayoutChange?()
+        }
+    }
+
+    var preferredHeight: CGFloat {
+        guard isFindBarVisible else { return 0 }
+        return showsReplace ? 63 : 32
+    }
+
+    init(scrollView: NSScrollView) {
+        self.scrollView = scrollView
+        super.init(frame: NSRect(origin: .zero, size: NSSize(width: scrollView.bounds.width, height: 0)))
+        autoresizingMask = [.width]
+        isHidden = true
+        configureControls()
+        scrollView.postsFrameChangedNotifications = true
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(scrollViewFrameDidChange),
+            name: NSView.frameDidChangeNotification,
+            object: scrollView
+        )
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    override var isFlipped: Bool { true }
+
+    override func draw(_ dirtyRect: NSRect) {
+        // On its first show AppKit can invalidate the full scroll view before
+        // the bar's 32pt frame lands. Clip the fill ourselves so that first
+        // pass cannot paint over the document below.
+        let barHeight = min(bounds.height, preferredHeight)
+        guard barHeight > 0 else { return }
+        NSColor.textBackgroundColor.setFill()
+        NSRect(x: bounds.minX, y: bounds.minY, width: bounds.width, height: barHeight).fill()
+        NSColor.separatorColor.setFill()
+        NSRect(x: bounds.minX, y: barHeight - 1, width: bounds.width, height: 1).fill()
+    }
+
+    override func layout() {
+        super.layout()
+        let width = max(0, (scrollView?.bounds.width ?? 0) - leadingInset)
+        frame = NSRect(x: leadingInset, y: 0, width: width, height: preferredHeight)
+        guard isFindBarVisible else { return }
+
+        let margin: CGFloat = 4
+        let gap: CGFloat = 6
+        var right = bounds.width - 8
+        replaceToggle.frame = NSRect(x: right - 72, y: 7, width: 72, height: 20)
+        right = replaceToggle.frame.minX - gap
+        doneButton.frame = NSRect(x: right - 48, y: margin, width: 48, height: 24)
+        right = doneButton.frame.minX - gap
+        nextButton.frame = NSRect(x: right - 26, y: margin, width: 26, height: 24)
+        right = nextButton.frame.minX - 2
+        previousButton.frame = NSRect(x: right - 26, y: margin, width: 26, height: 24)
+        right = previousButton.frame.minX - gap
+        resultLabel.frame = NSRect(x: right - 52, y: 6, width: 52, height: 20)
+        right = resultLabel.frame.minX - gap
+        searchField.frame = NSRect(x: 0, y: margin, width: max(120, right), height: 24)
+
+        replaceAllButton.frame = NSRect(x: bounds.width - 52, y: 35, width: 44, height: 24)
+        replaceButton.frame = NSRect(x: replaceAllButton.frame.minX - gap - 70, y: 35, width: 70, height: 24)
+        replaceField.frame = NSRect(x: 0, y: 35, width: max(120, replaceButton.frame.minX - gap),
+                                    height: 24)
+    }
+
+    func setReplaceVisible(_ visible: Bool) {
+        replaceToggle.state = visible ? .on : .off
+        setReplaceRowVisible(visible)
+    }
+
+    func setResultCount(_ count: (current: Int, total: Int)?) {
+        if let count {
+            resultLabel.stringValue = "\(count.current) of \(count.total)"
+            resultLabel.textColor = .secondaryLabelColor
+        } else if !query.isEmpty {
+            resultLabel.stringValue = "None"
+            resultLabel.textColor = .systemRed
+        } else {
+            resultLabel.stringValue = ""
+            resultLabel.textColor = .secondaryLabelColor
+        }
+    }
+
+    func focusSearch() {
+        window?.makeFirstResponder(searchField)
+        searchField.selectText(nil)
+    }
+
+    func focusReplace() {
+        guard showsReplace else { return focusSearch() }
+        window?.makeFirstResponder(replaceField)
+        replaceField.selectText(nil)
+    }
+
+    private func configureControls() {
+        searchField.placeholderString = "Find"
+        searchField.sendsSearchStringImmediately = true
+        searchField.sendsWholeSearchString = false
+        searchField.target = self
+        searchField.action = #selector(searchChanged)
+        searchField.delegate = self
+        searchField.setAccessibilityLabel("Find")
+
+        resultLabel.alignment = .right
+        resultLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        resultLabel.textColor = .secondaryLabelColor
+
+        configureArrow(previousButton, symbol: "chevron.left", label: "Previous",
+                       action: #selector(previousPressed))
+        configureArrow(nextButton, symbol: "chevron.right", label: "Next",
+                       action: #selector(nextPressed))
+
+        doneButton.target = self
+        doneButton.action = #selector(closePressed)
+        doneButton.bezelStyle = .rounded
+        doneButton.controlSize = .small
+
+        replaceToggle.target = self
+        replaceToggle.action = #selector(replaceToggleChanged)
+        replaceToggle.controlSize = .small
+
+        replaceField.placeholderString = "Replace"
+        replaceField.delegate = self
+        replaceField.setAccessibilityLabel("Replace with")
+
+        replaceButton.target = self
+        replaceButton.action = #selector(replacePressed)
+        replaceButton.bezelStyle = .rounded
+        replaceButton.controlSize = .small
+        replaceAllButton.target = self
+        replaceAllButton.action = #selector(replaceAllPressed)
+        replaceAllButton.bezelStyle = .rounded
+        replaceAllButton.controlSize = .small
+        replaceAllButton.toolTip = "Replace All"
+
+        [searchField, resultLabel, previousButton, nextButton, doneButton, replaceToggle,
+         replaceField, replaceButton, replaceAllButton].forEach(addSubview)
+        setReplaceRowVisible(false)
+    }
+
+    @objc private func scrollViewFrameDidChange() {
+        needsLayout = true
+        layoutSubtreeIfNeeded()
+        onLayoutChange?()
+    }
+
+    private func configureArrow(_ button: NSButton, symbol: String, label: String, action: Selector) {
+        button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)
+        button.imagePosition = .imageOnly
+        button.bezelStyle = .rounded
+        button.controlSize = .small
+        button.target = self
+        button.action = action
+        button.toolTip = label
+    }
+
+    private func setReplaceRowVisible(_ visible: Bool) {
+        replaceField.isHidden = !visible
+        replaceButton.isHidden = !visible
+        replaceAllButton.isHidden = !visible
+        needsLayout = true
+        onLayoutChange?()
+    }
+
+    @objc private func searchChanged() {
+        onQueryChange?(query)
+    }
+
+    @objc private func nextPressed() {
+        onNext?()
+    }
+
+    @objc private func previousPressed() {
+        onPrevious?()
+    }
+
+    @objc private func closePressed() {
+        onClose?()
+    }
+
+    @objc private func replaceToggleChanged() {
+        setReplaceRowVisible(replaceToggle.state == .on)
+        if replaceToggle.state == .on { focusReplace() } else { focusSearch() }
+    }
+
+    @objc private func replacePressed() {
+        onReplace?(replaceField.stringValue)
+    }
+
+    @objc private func replaceAllPressed() {
+        onReplaceAll?(replaceField.stringValue)
+    }
+
+    func controlTextDidChange(_ notification: Notification) {
+        guard notification.object as? NSSearchField === searchField else { return }
+        onQueryChange?(query)
+    }
+
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
+            onClose?()
+            return true
+        }
+        if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+            if control === searchField {
+                NSApp.currentEvent?.modifierFlags.contains(.shift) == true ? onPrevious?() : onNext?()
+            } else if control === replaceField {
+                onReplace?(replaceField.stringValue)
+            }
+            return true
+        }
+        return false
+    }
 }
 
 /// Loads `![alt](path)` images relative to the document's folder.

@@ -148,6 +148,21 @@ test('Replace moves past a replacement that contains the query', () => {
   margin.close('rep')
 })
 
+test('find count refreshes after the document changes', () => {
+  margin.open('find-count', 'Alpha\n', '', true)
+  margin.find('open')
+  findInput('Alpha')
+  assert.equal(document.querySelector('.find-count').textContent, '1 of 1')
+
+  const view = pageEditor().view
+  view.dispatch(view.state.tr.insertText('\n\nAlpha', view.state.doc.content.size))
+  assert.equal(document.querySelectorAll('.find-match').length, 2)
+  assert.equal(document.querySelector('.find-count').textContent, '1 of 2')
+
+  document.querySelector('[data-act="close"]').click()
+  margin.close('find-count')
+})
+
 test('closing the find bar clears highlights in every tab', () => {
   margin.open('fa', 'alpha beta alpha\n', '', true)
   margin.open('fb', 'gamma\n', '', true)
