@@ -48,7 +48,8 @@ const docs = new Map<string, Doc>()
 let activeId: string | null = null
 let sourceMode = false
 let saveTimer: number | undefined
-const SAVE_DELAY = 450
+let saveIdle: number | undefined
+const SAVE_DELAY = 700
 
 const host = document.getElementById('editor')!
 const sourceArea = document.getElementById('source') as HTMLTextAreaElement
@@ -82,8 +83,17 @@ function markEdited() {
   if (!doc) return
   if (!doc.pending) post({ type: 'edited', id: doc.id })
   doc.pending = true
-  clearTimeout(saveTimer)
-  saveTimer = window.setTimeout(flush, SAVE_DELAY)
+  cancelScheduledSave()
+  saveTimer = window.setTimeout(() => {
+    saveTimer = undefined
+    saveIdle = scheduleWhenIdle(flush)
+  }, SAVE_DELAY)
+}
+
+function cancelScheduledSave() {
+  if (saveTimer !== undefined) window.clearTimeout(saveTimer)
+  if (saveIdle !== undefined) cancelWhenIdle(saveIdle)
+  saveTimer = saveIdle = undefined
 }
 
 function currentMarkdown(doc: Doc): string {
@@ -95,7 +105,7 @@ function currentMarkdown(doc: Doc): string {
 
 /** Posts content for every edited doc; returns it as well for synchronous saves. */
 function flush(): Record<string, string> {
-  clearTimeout(saveTimer)
+  cancelScheduledSave()
   const out: Record<string, string> = {}
   for (const doc of docs.values()) {
     if (!doc.pending) continue
@@ -129,9 +139,28 @@ editor.on('transaction', ({ transaction }) => {
 
 // Headings for the sidebar outline, and word count, posted after edits settle.
 let outlineTimer: number | undefined
+let outlineIdle: number | undefined
 function scheduleOutline() {
-  clearTimeout(outlineTimer)
-  outlineTimer = window.setTimeout(postOutline, 250)
+  if (outlineTimer !== undefined) window.clearTimeout(outlineTimer)
+  if (outlineIdle !== undefined) cancelWhenIdle(outlineIdle)
+  outlineTimer = window.setTimeout(() => {
+    outlineTimer = undefined
+    outlineIdle = scheduleWhenIdle(() => {
+      outlineIdle = undefined
+      postOutline()
+    })
+  }, 500)
+}
+
+function scheduleWhenIdle(task: () => void): number {
+  return window.requestIdleCallback
+    ? window.requestIdleCallback(task, { timeout: 1000 })
+    : window.setTimeout(task, 0)
+}
+
+function cancelWhenIdle(id: number) {
+  if (window.requestIdleCallback && window.cancelIdleCallback) window.cancelIdleCallback(id)
+  else window.clearTimeout(id)
 }
 
 function postOutline() {

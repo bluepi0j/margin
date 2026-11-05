@@ -215,8 +215,7 @@ extension NativeTextView {
     ) {
         guard let storage = textStorage,
               let bridge = layoutBridge,
-              let container = bridge.firstTextContainer,
-              let tlm = textLayoutManager else {
+              let container = bridge.firstTextContainer else {
             removeAllWideTableOverlays()
             return
         }
@@ -232,6 +231,7 @@ extension NativeTextView {
         let anchorRanges: [NSRange]
         if let knownWideTableAnchorRanges {
             anchorRanges = knownWideTableAnchorRanges
+            wideTableAnchorRanges = anchorRanges
         } else {
             // Ordinary edits do not carry table results, so discover anchors
             // once. Width restyles pass their exact new anchor set and avoid
@@ -247,6 +247,7 @@ extension NativeTextView {
                 if value is Int { discovered.append(attrRange) }
             }
             anchorRanges = discovered
+            wideTableAnchorRanges = anchorRanges
             let scanMs = Double(
                 DispatchTime.now().uptimeNanoseconds - scanStarted
             ) / 1_000_000
@@ -265,14 +266,12 @@ extension NativeTextView {
 
         var seenSourceIDs: Set<Int> = []
 
-        // Settle layout before measuring — stale fragments would yield wrong anchor Ys.
-        let overlayT0 = DispatchTime.now().uptimeNanoseconds
+        // A viewport pass settles the visible destination without forcing every
+        // preceding fragment. Anchors outside that pass stay hidden until their
+        // own fragment becomes available; scrolling reconciles them again.
         if !layoutAlreadySettled {
-            tlm.ensureLayout(for: tlm.documentRange)
+            layoutViewportImmediately()
         }
-        PerfTrace.stamp("wideTableOverlay.ensureLayout(fullDoc)",
-                        Double(DispatchTime.now().uptimeNanoseconds - overlayT0) / 1_000_000,
-                        "settled=\(layoutAlreadySettled ? 1 : 0) docLen=\(storage.length)")
 
         for attrRange in anchorRanges {
             guard attrRange.location != NSNotFound,
@@ -292,8 +291,17 @@ extension NativeTextView {
                   ) as? NSImage else { continue }
             seenSourceIDs.insert(sourceID)
 
-            let anchorRect = bridge.boundingRect(forCharacterRange: attrRange, in: container)
-            guard !anchorRect.isEmpty else { continue }
+            guard let anchorRect = bridge.laidOutBoundingRect(forCharacterRange: attrRange),
+                  !anchorRect.isEmpty else {
+                // Never leave a table at a stale Y while TextKit is still
+                // waiting for viewport layout. The scroll observer retries
+                // after the destination viewport has settled.
+                if let existing = wideTableOverlays[sourceID] {
+                    host.setNeedsDisplay(existing.frame)
+                    existing.isHidden = true
+                }
+                continue
+            }
 
             let totalHeight = (storage.attribute(.scrollableBlockTotalHeight, at: attrRange.location, effectiveRange: nil) as? CGFloat) ?? image.size.height
             // In breakout the overlay lives in the container and spans its visible width,
@@ -309,6 +317,7 @@ extension NativeTextView {
             let leftContentInset: CGFloat = breakout ? max(0, columnLeft) : 0
 
             if let existing = wideTableOverlays[sourceID] {
+                existing.isHidden = false
                 if !existing.frame.equalTo(overlayFrame) {
                     // Invalidate both old + new region so the vacated area redraws.
                     host.setNeedsDisplay(existing.frame)
@@ -343,5 +352,6 @@ extension NativeTextView {
     func removeAllWideTableOverlays() {
         for (_, overlay) in wideTableOverlays { overlay.removeFromSuperview() }
         wideTableOverlays.removeAll()
+        wideTableAnchorRanges.removeAll()
     }
 }

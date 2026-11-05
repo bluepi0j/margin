@@ -26,6 +26,13 @@ final class NativeDocumentEditor: DocumentEditor {
     private var scrollObserver: NSObjectProtocol?
     private var appearance = Preferences.shared.appearance
     private var keyMonitor: Any?
+    private struct BlockChipContext {
+        let storageLength: Int
+        let caret: Int
+        let codeFence: MarkdownEditing.CodeFence?
+        let table: MarkdownTable?
+    }
+    private var blockChipContext: BlockChipContext?
 
     init() {
         applySettings()
@@ -176,17 +183,29 @@ final class NativeDocumentEditor: DocumentEditor {
 
     private func selectionDidChange() {
         guard let tv = textView, model.documentId != nil else { return }
-        let state = MarkdownEditing.state(tv.string, caret: tv.selectedRange().location)
+        let text = tv.string
+        let caret = tv.selectedRange().location
+        let state = MarkdownEditing.state(text, caret: caret)
+        let table = state.codeFence == nil
+            ? MarkdownTable.at(caret, in: text, codeFenceAlreadyChecked: true)
+            : nil
         var sel = EditorSelection()
         sel.flags = state.flags
         sel.heading = state.heading
         sel.sourceMode = model.rawSource
-        if MarkdownTable.at(tv.selectedRange().location, in: tv.string) != nil { sel.flags.insert("table") }
+        if table != nil { sel.flags.insert("table") }
         if sel != lastSelection {
             lastSelection = sel
             onEvent?(.selection(sel))
         }
-        updateBlockChip()
+        let context = BlockChipContext(
+            storageLength: tv.textStorage?.length ?? (text as NSString).length,
+            caret: caret,
+            codeFence: state.codeFence,
+            table: table
+        )
+        blockChipContext = context
+        updateBlockChip(context)
     }
 
     // MARK: Code block and table labels
@@ -194,14 +213,40 @@ final class NativeDocumentEditor: DocumentEditor {
     /// Puts a small label at the top right of the code block (its language)
     /// or table (its row and column commands) the caret is in, or removes it.
     private func updateBlockChip() {
-        guard let tv = textView, !model.rawSource, let scroll = tv.enclosingScrollView else { return setChip(nil) }
+        guard let tv = textView, model.documentId != nil else { return setChip(nil) }
         let caret = tv.selectedRange().location
+        let storageLength = tv.textStorage?.length ?? 0
+        if let cached = blockChipContext,
+           cached.storageLength == storageLength,
+           cached.caret == caret {
+            updateBlockChip(cached)
+            return
+        }
+        let text = tv.string
+        let fence = MarkdownEditing.codeFence(containing: caret, in: text)
+        let table = fence == nil
+            ? MarkdownTable.at(caret, in: text, codeFenceAlreadyChecked: true)
+            : nil
+        let context = BlockChipContext(
+            storageLength: storageLength,
+            caret: caret,
+            codeFence: fence,
+            table: table
+        )
+        blockChipContext = context
+        updateBlockChip(context)
+    }
+
+    private func updateBlockChip(_ context: BlockChipContext) {
+        guard let tv = textView, !model.rawSource, let scroll = tv.enclosingScrollView else {
+            return setChip(nil)
+        }
         let kind: NativeEditorModel.BlockChip.Kind
         let start: Int
-        if let fence = MarkdownEditing.codeFence(containing: caret, in: tv.string) {
+        if let fence = context.codeFence {
             kind = .code(language: fence.language)
             start = fence.openingLine.location
-        } else if let table = MarkdownTable.at(caret, in: tv.string) {
+        } else if let table = context.table {
             kind = .table
             start = table.range.location
         } else {

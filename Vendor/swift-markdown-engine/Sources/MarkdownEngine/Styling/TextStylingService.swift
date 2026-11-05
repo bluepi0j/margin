@@ -154,10 +154,24 @@ struct TextStylingService {
         )
         textView.textStorage?.endEditing()
         let attrMs = Double(DispatchTime.now().uptimeNanoseconds - attrT0) / 1_000_000
-        // No ensureLayout here:
+        // Ordinary edits only invalidate the fragments around the changed
+        // paragraph. Re-laying out from the document head on every keystroke
+        // makes typing near the end of a very large note scale with the whole
+        // file (and does so once per event, because TextKit also invalidates
+        // downstream fragments). A full-scope restyle still uses the conservative
+        // document-head pass below.
         let evlT0 = DispatchTime.now().uptimeNanoseconds
         textView.setNeedsDisplay(textView.visibleRect)
-        (textView as? NativeTextView)?.ensureVisibleLayout()
+        if let nativeTextView = textView as? NativeTextView {
+            let fullDocument = paragraphs.count == 1
+                && paragraphs[0].location == 0
+                && NSMaxRange(paragraphs[0]) >= (textView.textStorage?.length ?? 0)
+            if fullDocument {
+                nativeTextView.ensureVisibleLayout()
+            } else {
+                nativeTextView.layoutViewportImmediately()
+            }
+        }
         let evlMs = Double(DispatchTime.now().uptimeNanoseconds - evlT0) / 1_000_000
         PerfTrace.note { "  restyle split: styleAttrs=\(String(format: "%.2f", styleMs))ms spell=\(String(format: "%.2f", spellMs))ms attrApply(paras=\(paragraphs.count))=\(String(format: "%.2f", attrMs))ms ensureVisLayout=\(String(format: "%.2f", evlMs))ms" }
         return wideTableAnchorRanges

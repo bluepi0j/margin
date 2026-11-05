@@ -494,4 +494,70 @@ extension NativeTextView {
             fragment.layoutFragmentFrame.minY <= visBot
         }
     }
+
+    /// Layout only what the current viewport needs. Attribute-only changes made
+    /// by a paragraph-scoped edit invalidate that paragraph and the geometry
+    /// below it, but the fragments above remain settled. Walking from the
+    /// document head in that steady state turns every keystroke or scroll tick
+    /// into O(document), even though TextKit already owns a viewport layout
+    /// controller for the visible range.
+    func layoutViewportImmediately() {
+        guard let textLayoutManager else { return }
+        textLayoutManager.textViewportLayoutController.layoutViewport()
+    }
+
+    /// AppKit normally scrolls the end command by revealing the caret. On a
+    /// large document that reveal settles every fragment from the document
+    /// head to the tail, blocking the main thread for seconds. The document
+    /// height is already cached, so move the clip view to that known bottom and
+    /// let TextKit lay out only the destination viewport instead.
+    override func moveToEndOfDocument(_ sender: Any?) {
+        guard textLayoutManager != nil else {
+            super.moveToEndOfDocument(sender)
+            return
+        }
+        // The caret reveal inside super would otherwise settle the entire
+        // prefix. We perform the same destination scroll below, viewport-only.
+        suppressAutoRevealOnce = true
+        super.moveToEndOfDocument(sender)
+        if let scrollView = enclosingScrollView {
+            pendingFullLayoutMeasure = false
+            if configuration.heightBehavior == .scrolls,
+               let container = scrollView.documentView as? NativeTextViewContainer {
+                let maxY = max(
+                    -scrollView.contentInsets.top,
+                    container.scrollableContentHeight - scrollView.contentView.bounds.height
+                )
+                scrollView.contentView.scroll(
+                    to: NSPoint(x: scrollView.contentView.bounds.minX, y: maxY)
+                )
+                scrollView.reflectScrolledClipView(scrollView.contentView)
+            }
+        }
+        layoutViewportImmediately()
+        needsDisplay = true
+        // AppKit can finish its own destination scroll after this command
+        // returns. Reapply the viewport fragment and bottom scroll once that
+        // geometry is visible. This is local work rather than full layout.
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.suppressAutoRevealOnce = false
+            self.layoutViewportImmediately()
+            if self.configuration.heightBehavior == .scrolls,
+               let scrollView = self.enclosingScrollView,
+               let container = scrollView.documentView as? NativeTextViewContainer {
+                let maxY = max(
+                    -scrollView.contentInsets.top,
+                    container.scrollableContentHeight - scrollView.contentView.bounds.height
+                )
+                if abs(scrollView.contentView.bounds.minY - maxY) > 0.5 {
+                    scrollView.contentView.scroll(
+                        to: NSPoint(x: scrollView.contentView.bounds.minX, y: maxY)
+                    )
+                    scrollView.reflectScrolledClipView(scrollView.contentView)
+                }
+            }
+            self.needsDisplay = true
+        }
+    }
 }

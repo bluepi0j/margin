@@ -173,6 +173,7 @@ public enum MarkdownEditing {
     public struct State: Equatable {
         public var flags: Set<String> = []
         public var heading = 0
+        public var codeFence: CodeFence?
         public init() {}
     }
 
@@ -190,7 +191,8 @@ public enum MarkdownEditing {
         case .quote: s.flags.insert("blockquote")
         case .paragraph: break
         }
-        if codeFence(containing: caret, in: text) != nil { s.flags.insert("codeBlock") }
+        s.codeFence = codeFence(containing: caret, in: text)
+        if s.codeFence != nil { s.flags.insert("codeBlock") }
         // Inline marks: an odd number of markers before the caret on this line,
         // not counting the block prefix (a "* " bullet is not italic).
         let lineNS = line as NSString
@@ -222,16 +224,49 @@ public enum MarkdownEditing {
     /// The fenced code block (``` or ~~~) that `caret` is in, counting its fence lines.
     public static func codeFence(containing caret: Int, in text: String) -> CodeFence? {
         let ns = text as NSString
+        let caret = min(max(0, caret), ns.length)
         var open: CodeFence?
         var marker = ""
         var location = 0
         while location < ns.length {
-            let fullLine = ns.lineRange(for: NSRange(location: location, length: 0))
-            let line = ns.substring(with: fullLine).trimmingCharacters(in: .newlines)
-            let lineNS = line as NSString
-            let lineRange = NSRange(location: location, length: lineNS.length)
-            let indent = line.prefix { $0 == " " }.count
-            let body = line.dropFirst(indent)
+            var lineStart = 0
+            var lineEnd = 0
+            var contentEnd = 0
+            ns.getLineStart(
+                &lineStart,
+                end: &lineEnd,
+                contentsEnd: &contentEnd,
+                for: NSRange(location: location, length: 0)
+            )
+            let lineRange = NSRange(location: lineStart, length: contentEnd - lineStart)
+
+            // This path runs from text/selection notifications. Avoid creating
+            // and trimming a Swift String for every ordinary paragraph line;
+            // most lines cannot begin a fence and only need this character
+            // check. The old line-by-line bridging made caret moves at the end
+            // of a large note scan for ~100 ms.
+            var bodyStart = lineStart
+            var indent = 0
+            while bodyStart < contentEnd,
+                  ns.character(at: bodyStart) == 0x20,
+                  indent < 4 {
+                bodyStart += 1
+                indent += 1
+            }
+            guard indent <= 3,
+                  bodyStart + 2 < contentEnd else {
+                location = lineEnd
+                continue
+            }
+            let first = ns.character(at: bodyStart)
+            guard first == 0x60 || first == 0x7e else {
+                location = lineEnd
+                continue
+            }
+
+            let body = ns.substring(
+                with: NSRange(location: bodyStart, length: contentEnd - bodyStart)
+            )
             if let current = open {
                 // A closing fence: the same marker, nothing after it.
                 if indent <= 3, body.hasPrefix(marker), body.trimmingCharacters(in: .whitespaces).allSatisfy({ $0 == marker.first }) {
@@ -241,14 +276,17 @@ public enum MarkdownEditing {
             } else if indent <= 3, let fence = ["```", "~~~"].first(where: { body.hasPrefix($0) }) {
                 let run = body.prefix { $0 == fence.first }.count
                 marker = String(repeating: fence.first!, count: run)
-                var start = location + indent + run
+                var start = bodyStart + run
                 while start < NSMaxRange(lineRange), ns.character(at: start) == 0x20 { start += 1 }
                 var end = start
                 while end < NSMaxRange(lineRange), let c = UnicodeScalar(ns.character(at: end)), !CharacterSet.whitespaces.contains(c) { end += 1 }
                 let range = NSRange(location: start, length: end - start)
                 open = CodeFence(openingLine: lineRange, languageRange: range, language: ns.substring(with: range))
             }
-            location = NSMaxRange(fullLine)
+            if let open, caret >= open.openingLine.location, caret < lineEnd {
+                return open
+            }
+            location = lineEnd
         }
         if let open, caret >= open.openingLine.location { return open }
         return nil

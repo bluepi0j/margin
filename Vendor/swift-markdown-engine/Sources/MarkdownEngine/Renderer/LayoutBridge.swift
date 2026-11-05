@@ -49,6 +49,26 @@ final class LayoutBridge {
         return result.isNull ? .zero : result
     }
 
+    /// Bounding rect for an anchor only when TextKit has already laid out its
+    /// fragment. Unlike `boundingRect`, this never asks TextKit to settle a
+    /// missing prefix; callers can defer off-screen anchors until the viewport
+    /// layout controller reaches them.
+    func laidOutBoundingRect(forCharacterRange range: NSRange) -> CGRect? {
+        guard let textRange = textRange(for: range),
+              let fragment = textLayoutManager.textLayoutFragment(for: textRange.location),
+              fragment.state == .layoutAvailable else {
+            return nil
+        }
+        var result = CGRect.null
+        textLayoutManager.enumerateTextSegments(
+            in: textRange, type: .standard, options: []
+        ) { _, rect, _, _ in
+            result = result.isNull ? rect : result.union(rect)
+            return true
+        }
+        return result.isNull ? nil : result
+    }
+
     func characterIndex(
         for point: CGPoint,
         in textContainer: NSTextContainer,

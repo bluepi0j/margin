@@ -25,8 +25,13 @@ export class OutlineRail {
   private card = document.createElement('aside')
   private rows: Row[] = []
   private headings: HTMLElement[] = []
+  private headingTops: number[] = []
+  private observedPage: HTMLElement | null = null
+  private resizeObserver: ResizeObserver | null = null
+  private layoutFrame = 0
   private hover: number | null = null
   private here = 0
+  private scrollFrame = 0
   enabled = true
 
   /** `page` gives the rich-text element while it is showing, else null. */
@@ -35,6 +40,9 @@ export class OutlineRail {
     this.root.setAttribute('aria-hidden', 'true')
     this.card.className = 'rail-card'
     document.body.append(this.root, this.card)
+    if (typeof ResizeObserver !== 'undefined') {
+      this.resizeObserver = new ResizeObserver(() => this.scheduleMeasure())
+    }
 
     // Jump on press, scrub while the button is held. WebKit sometimes drops
     // the release, so "held" is read from `buttons` rather than tracked from
@@ -60,13 +68,14 @@ export class OutlineRail {
       this.card.classList.remove('is-visible')
       this.paint()
     })
-    window.addEventListener('scroll', () => this.track(), { passive: true })
+    window.addEventListener('scroll', () => this.scheduleTrack(), { passive: true })
     window.addEventListener('resize', () => this.rebuild())
   }
 
   /** Re-reads the headings; call after the document or the tab changes. */
   rebuild() {
     const page = this.page()
+    this.observe(page)
     const all = page && this.enabled ? [...page.querySelectorAll<HTMLElement>('h1, h2, h3')] : []
     // More headings than fit at the tightest pitch: sample them evenly, so the
     // rail stays proportional to the whole document instead of being cut off.
@@ -76,11 +85,16 @@ export class OutlineRail {
     const gutter = page ? page.getBoundingClientRect().left : 0
     this.root.replaceChildren()
     this.rows = []
+    this.headingTops = []
     if (this.headings.length < 3 || gutter < MIN_GUTTER) {
       this.root.hidden = true
       this.card.classList.remove('is-visible')
       return
     }
+    // Cache sampled heading tops so scroll handling does not force layout for
+    // every DOM heading on every frame. ResizeObserver below refreshes the
+    // cache when images, diagrams, or other async content change the page.
+    this.measureHeadingTops()
     this.root.hidden = false
     const rowCount = this.headings.length * 2 - 1
     const pitch = Math.min(PITCH[1], Math.max(PITCH[0], (window.innerHeight * SPAN) / rowCount))
@@ -90,6 +104,34 @@ export class OutlineRail {
       if (i < this.headings.length - 1) this.add(i, true, 0)
     })
     this.track()
+  }
+
+  private observe(page: HTMLElement | null) {
+    if (page === this.observedPage) return
+    this.resizeObserver?.disconnect()
+    this.observedPage = page
+    if (page) this.resizeObserver?.observe(page)
+  }
+
+  private measureHeadingTops() {
+    this.headingTops = this.headings.map(h => h.getBoundingClientRect().top + window.scrollY)
+  }
+
+  private scheduleMeasure() {
+    if (!this.headingTops.length || this.layoutFrame) return
+    this.layoutFrame = requestAnimationFrame(() => {
+      this.layoutFrame = 0
+      this.measureHeadingTops()
+      this.track()
+    })
+  }
+
+  private scheduleTrack() {
+    if (this.scrollFrame) return
+    this.scrollFrame = requestAnimationFrame(() => {
+      this.scrollFrame = 0
+      this.track()
+    })
   }
 
   private add(heading: number, minor: boolean, level: number) {
@@ -103,13 +145,21 @@ export class OutlineRail {
 
   /** At rest the swell follows the heading you are reading under. */
   private track() {
-    if (!this.headings.length) return
-    let current = 0
-    const line = 80
-    this.headings.forEach((h, i) => {
-      if (h.getBoundingClientRect().top <= line) current = i
-    })
-    this.here = current * 2
+    if (!this.headingTops.length) return
+    // Heading tops are sorted and can contain thousands of entries in a long
+    // note. Find the last one above the reading line with a binary search
+    // instead of measuring all headings on every scroll event.
+    const line = window.scrollY + 80
+    let lo = 0
+    let hi = this.headingTops.length
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1
+      if (this.headingTops[mid] <= line) lo = mid + 1
+      else hi = mid
+    }
+    const next = Math.max(0, lo - 1) * 2
+    if (next === this.here) return
+    this.here = next
     if (this.hover === null) this.paint()
   }
 

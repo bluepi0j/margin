@@ -85,6 +85,9 @@ final class NativeTextView: NSTextView {
     // MARK: Wide-table overlay state
     /// Live NSScrollView per wide table; keyed by source-ID hash.
     var wideTableOverlays: [Int: WideTableOverlay] = [:]
+    /// Latest storage ranges for the wide-table anchors. Scroll reconciliation
+    /// reuses this snapshot; only text mutations rescan the storage.
+    var wideTableAnchorRanges: [NSRange] = []
     /// Persisted horizontal scroll offset per wide table; survives restyles.
     var tableHorizontalScrollOffsets: [Int: CGFloat] = [:]
 

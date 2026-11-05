@@ -410,7 +410,19 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
             scrollView.clampToInsets()
         }
         NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification, object: scrollView.contentView, queue: nil) { _ in
-            textView.ensureVisibleLayout()
+            // NSTextView's viewport layout controller can resolve the target
+            // directly, including after a scrollbar drag or Home/End jump.
+            // Walking every fragment from the document head first turns those
+            // jumps into synchronous whole-document layout on the main thread.
+            textView.layoutViewportImmediately()
+            // The destination fragment is now available. Reuse the cached
+            // anchor list so a wide table entering the viewport appears at its
+            // current location without a storage walk or full-document layout.
+            textView.updateWideTableOverlays(
+                immediately: true,
+                layoutAlreadySettled: true,
+                knownWideTableAnchorRanges: textView.wideTableAnchorRanges
+            )
             if context.coordinator.isWritingToolsActive {
                 context.coordinator.fixWritingToolsChildWindowIfNeeded(textView: textView)
             }

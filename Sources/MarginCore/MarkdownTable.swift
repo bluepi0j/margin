@@ -26,9 +26,17 @@ public struct MarkdownTable: Equatable, Sendable {
     // MARK: Finding
 
     /// The table the caret is in, if any.
-    public static func at(_ caret: Int, in text: String) -> MarkdownTable? {
+    public static func at(
+        _ caret: Int,
+        in text: String,
+        codeFenceAlreadyChecked: Bool = false
+    ) -> MarkdownTable? {
         let ns = text as NSString
-        guard ns.length > 0, MarkdownEditing.codeFence(containing: caret, in: text) == nil else { return nil }
+        guard ns.length > 0 else { return nil }
+        if !codeFenceAlreadyChecked,
+           MarkdownEditing.codeFence(containing: caret, in: text) != nil {
+            return nil
+        }
         let caret = min(caret, ns.length)
         let caretLine = ns.lineRange(for: NSRange(location: caret, length: 0))
         guard isRow(ns.substring(with: caretLine)) else { return nil }

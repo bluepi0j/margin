@@ -27,6 +27,7 @@ const BUTTONS: [string, string][] = [
 export class BubbleBar {
   private el = document.createElement('div')
   private dragging = false
+  private updateFrame = 0
 
   constructor(private editor: Editor) {
     this.el.className = 'bubble'
@@ -61,18 +62,26 @@ export class BubbleBar {
     const endDrag = () => {
       if (!this.dragging) return
       this.dragging = false
-      requestAnimationFrame(() => this.update())
+      this.scheduleUpdate()
     }
     document.addEventListener('mouseup', endDrag)
     // Safety net for a lost mouseup: the button is up as soon as the mouse moves.
     document.addEventListener('mousemove', e => {
       if (this.dragging && e.buttons === 0) endDrag()
     })
-    window.addEventListener('scroll', () => this.update(), { passive: true })
+    window.addEventListener('scroll', () => this.scheduleUpdate(), { passive: true })
   }
 
   hide() {
     this.el.hidden = true
+  }
+
+  private scheduleUpdate() {
+    if (this.updateFrame) return
+    this.updateFrame = requestAnimationFrame(() => {
+      this.updateFrame = 0
+      this.update()
+    })
   }
 
   update() {
