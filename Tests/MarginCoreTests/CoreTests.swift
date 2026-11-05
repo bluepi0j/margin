@@ -227,6 +227,38 @@ final class DocumentTitleTests: XCTestCase {
         XCTAssertEqual(try fm.contentsOfDirectory(atPath: drafts.appendingPathComponent("assets").path), ["shot.png"])
     }
 
+    func testSavingARegularFileCopiesAllLocalImages() throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent("margin-save-as-\(UUID().uuidString)")
+        let source = base.appendingPathComponent("Source")
+        let destination = base.appendingPathComponent("Destination")
+        let fm = FileManager.default
+        try fm.createDirectory(at: source.appendingPathComponent("assets"), withIntermediateDirectories: true)
+        try fm.createDirectory(at: source.appendingPathComponent("images/deep"), withIntermediateDirectories: true)
+        try fm.createDirectory(at: destination, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: base) }
+
+        try Data([1]).write(to: source.appendingPathComponent("assets/shot.png"))
+        try Data([3]).write(to: source.appendingPathComponent("assets/shot (1).png"))
+        try Data([4]).write(to: source.appendingPathComponent("assets/paren(2).png"))
+        try Data([2]).write(to: source.appendingPathComponent("images/deep/map.svg"))
+        let markdown = "![shot](assets/shot.png) ![a \\] b](<assets/shot (1).png>) ![paren](assets/paren\\(2\\).png \"a \\\"quoted\\\" title\") ![map](images/deep/map.svg) ![remote](https://x/y.png)"
+
+        let out = Drafts.relocateImages(
+            in: markdown,
+            from: source,
+            to: destination,
+            copyAllLocalImages: true
+        )
+
+        XCTAssertEqual(out, "![shot](assets/shot.png) ![a \\] b](assets/shot%20%281%29.png) ![paren](assets/paren%282%29.png \"a \\\"quoted\\\" title\") ![map](images/deep/map.svg) ![remote](https://x/y.png)")
+        XCTAssertEqual(try Data(contentsOf: destination.appendingPathComponent("assets/shot.png")), Data([1]))
+        XCTAssertEqual(try Data(contentsOf: destination.appendingPathComponent("assets/shot (1).png")), Data([3]))
+        XCTAssertEqual(try Data(contentsOf: destination.appendingPathComponent("assets/paren(2).png")), Data([4]))
+        XCTAssertEqual(try Data(contentsOf: destination.appendingPathComponent("images/deep/map.svg")), Data([2]))
+        XCTAssertEqual(try Data(contentsOf: source.appendingPathComponent("assets/shot.png")), Data([1]))
+        XCTAssertEqual(try Data(contentsOf: source.appendingPathComponent("images/deep/map.svg")), Data([2]))
+    }
+
     func testDraftDetection() {
         XCTAssertTrue(Drafts.isDraft(Drafts.folder.appendingPathComponent("Draft-1.md")))
         XCTAssertFalse(Drafts.isDraft(URL(fileURLWithPath: "/tmp/x.md")))

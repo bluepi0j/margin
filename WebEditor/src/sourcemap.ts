@@ -28,7 +28,7 @@ export function blockOffsets(editor: Editor, doc: PMNode, markdown: string): num
       start = cursor === 0 ? 0 : lineEnd >= 0 ? lineEnd : markdown.length
     }
     offsets.push(start)
-    if (at >= 0) cursor = start + Math.min(own.length, Math.max(1, probe.length))
+    if (at >= 0) cursor = start + own.length
   })
   return offsets
 }

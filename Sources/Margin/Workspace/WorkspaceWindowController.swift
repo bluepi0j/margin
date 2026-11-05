@@ -528,9 +528,15 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
         guard await flushEditor() else { return false }
         let original = tab.unsavedText ?? tab.diskText ?? ""
         var text = original
-        if let draft = tab.url, Drafts.isDraft(draft) {
-            // Pasted images were saved next to the draft; take them along.
-            text = Drafts.relocateImages(in: text, from: draft.deletingLastPathComponent(), to: url.deletingLastPathComponent())
+        if let source = tab.url {
+            // Keep every local image inside the source folder alongside a
+            // normal Save As. Draft assets use the same relocation path.
+            text = Drafts.relocateImages(
+                in: text,
+                from: source.deletingLastPathComponent(),
+                to: url.deletingLastPathComponent(),
+                copyAllLocalImages: !Drafts.isDraft(source)
+            )
         }
         do {
             try TextFile.write(text, to: url)

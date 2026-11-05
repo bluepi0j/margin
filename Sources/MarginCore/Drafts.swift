@@ -27,25 +27,50 @@ public enum Drafts {
     /// copy those pasted images into `assets/` beside the new file and point
     /// other relative links at where they are, so none of them break. Keep the
     /// originals: saving can fail, and other drafts can reference the same asset.
-    public static func relocateImages(in markdown: String, from source: URL, to destination: URL) -> String {
-        let images = try! NSRegularExpression(pattern: #"!\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)"#)
+    public static func relocateImages(
+        in markdown: String,
+        from source: URL,
+        to destination: URL,
+        copyAllLocalImages: Bool = false
+    ) -> String {
+        // Capture either a pointy-bracket destination (`<name with spaces>`)
+        // or a bare destination, including escaped parentheses. Titles may use
+        // any of Markdown's three delimiters.
+        let images = try! NSRegularExpression(pattern: #"!\[(?:\\.|[^\]\\])*\]\((<(?:\\.|[^>\\\r\n])*>|(?:\\.|[^)\s\\])+)(?:\s+(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\((?:\\.|[^)\\])*\)))?\)"#)
         let ns = markdown as NSString
         var out = markdown
         var targets: [URL: URL] = [:]
         guard source.resolvingSymlinksInPath().standardizedFileURL != destination.resolvingSymlinksInPath().standardizedFileURL else { return markdown }
         for match in images.matches(in: markdown, range: NSRange(location: 0, length: ns.length)).reversed() {
-            let link = ns.substring(with: match.range(at: 1))
-            guard !link.contains(":"), !link.hasPrefix("/"), let path = link.removingPercentEncoding else { continue }
+            let rawLink = ns.substring(with: match.range(at: 1))
+            let link = rawLink.hasPrefix("<") && rawLink.hasSuffix(">")
+                ? String(rawLink.dropFirst().dropLast())
+                : rawLink
+            let unescaped = link.replacingOccurrences(
+                of: #"\\(.)"#,
+                with: "$1",
+                options: .regularExpression
+            )
+            guard !unescaped.contains(":"),
+                  !unescaped.hasPrefix("/"),
+                  let path = unescaped.removingPercentEncoding else { continue }
             let file = source.appendingPathComponent(path).standardizedFileURL
             guard FileManager.default.fileExists(atPath: file.path) else { continue }
             var target = targets[file] ?? file
-            if targets[file] == nil, file.isInside(source.appendingPathComponent("assets")) {
-                let assets = destination.appendingPathComponent("assets")
-                let moved = TextFile.availableURL(in: assets, base: file.deletingPathExtension().lastPathComponent, ext: file.pathExtension)
+            let shouldCopy = file.isInside(source.appendingPathComponent("assets"))
+                || (copyAllLocalImages && file.isInside(source))
+            if targets[file] == nil, shouldCopy {
+                let relative = file.relativePath(from: source)
+                let preferred = destination.appendingPathComponent(relative)
+                let copied = FileManager.default.fileExists(atPath: preferred.path)
+                    ? TextFile.availableURL(in: preferred.deletingLastPathComponent(),
+                                            base: preferred.deletingPathExtension().lastPathComponent,
+                                            ext: preferred.pathExtension)
+                    : preferred
                 do {
-                    try FileManager.default.createDirectory(at: assets, withIntermediateDirectories: true)
-                    try FileManager.default.copyItem(at: file, to: moved)
-                    target = moved
+                    try FileManager.default.createDirectory(at: copied.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    try FileManager.default.copyItem(at: file, to: copied)
+                    target = copied
                 } catch {}
             }
             targets[file] = target

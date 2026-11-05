@@ -205,6 +205,24 @@ export function escapeLineStart(text: string): string {
   // Four spaces (or a tab) would make an indented code block; an entity for
   // the first one keeps the text a paragraph and reads back as the space.
   if (/^( {4}|\t)/.test(text)) return (text[0] === '\t' ? '&#9;' : '&#32;') + text.slice(1)
+  const line = text.trim()
+  // A line of "=" is a setext heading underline. Escape the first marker;
+  // the parser reads that one back as literal text.
+  if (/^=+$/.test(line)) {
+    const at = text.indexOf('=')
+    return text.slice(0, at) + '\\' + text.slice(at)
+  }
+  // A pipe-delimited run of dashes is a GFM table delimiter. Escaping its
+  // first pipe keeps the whole line as paragraph text.
+  if (line.includes('|')) {
+    const cells = line.split('|')
+    if (cells[0] === '') cells.shift()
+    if (cells.at(-1) === '') cells.pop()
+    if (cells.length > 0 && cells.every(cell => /^:?-+:?$/.test(cell.trim()))) {
+      const at = text.indexOf('|')
+      return text.slice(0, at) + '\\' + text.slice(at)
+    }
+  }
   const m = /^(\s*)(?:(#{1,6}|[-+*])(?=\s|$)|(>)|(\d+)([.)])(?=\s|$)|([-*_])(?=(?:\s*\6){2,}\s*$))/.exec(text)
   if (!m) return text
   const [whole, ws, marker, quote, num, sep, rule] = m
@@ -221,6 +239,14 @@ export function installMinimalEscaping(editor: Editor) {
       (parent?.type != null && codeTypes.has(parent.type)) ||
       (node.marks ?? []).some((m: any) => codeTypes.has(typeof m === 'string' ? m : m.type))
     if (inCode) return text
+    // A bare URL/address is emitted as itself by MarginLink. Special URL
+    // characters such as "*" and "~" must stay raw so the parser still sees
+    // one autolink instead of escaped prose.
+    const link = (node.marks ?? []).find((m: any) =>
+      (typeof m === 'string' ? m : m.type) === 'link'
+    ) as any
+    const href = link?.attrs?.href
+    if (typeof href === 'string' && (text === href || `mailto:${text}` === href)) return text
     // First on its line of a paragraph: at the start, or after a hard break.
     const i = parent?.type === 'paragraph' ? (parent.content ?? []).indexOf(node) : -1
     const startsLine = i === 0 || (i > 0 && parent!.content![i - 1].type === 'hardBreak')

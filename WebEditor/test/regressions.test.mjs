@@ -92,6 +92,8 @@ test('block syntax at the start of a paragraph line is escaped', () => {
   const cases = [
     [p([{ type: 'text', text: 'a' }, { type: 'hardBreak' }, { type: 'text', text: '# b' }]), 'a  \n\\# b\n'],
     [p([{ type: 'text', text: 'a' }, { type: 'hardBreak' }, { type: 'text', text: '- b' }]), 'a  \n\\- b\n'],
+    [p([{ type: 'text', text: 'a' }, { type: 'hardBreak' }, { type: 'text', text: '==' }]), 'a  \n\\==\n'],
+    [p([{ type: 'text', text: 'a' }, { type: 'hardBreak' }, { type: 'text', text: '| --- |' }]), 'a  \n\\| --- |\n'],
     [p([{ type: 'text', text: '1. not a list' }]), '1\\. not a list\n'],
     [p([{ type: 'text', text: '---' }]), '\\---\n'],
     [p([{ type: 'text', text: '    indented' }]), '&#32;   indented\n'],
@@ -211,6 +213,15 @@ test('links with equal labels stay links unless the parser autolinks them', () =
   same('[./notes.md](./notes.md)\n')
   same('[custom:value](custom:value)\n')
   same('https://example.com/path?q=1&x=2\n')
+})
+
+test('link and image destinations and titles preserve escapes', () => {
+  same('[label](a\\)b)\n')
+  same('![x](a\\)b.png)\n')
+  same('[x](url "a \\"quoted\\" title")\n')
+  same('![x](a\\)b.png "a \\"quoted\\" title")\n')
+  same('https://example.com/a*b\n')
+  same('https://example.com/a~b\n')
 })
 
 test('private-use characters survive in prose, fenced code and raw HTML', () => {

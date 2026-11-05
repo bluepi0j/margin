@@ -83,3 +83,17 @@ test('Markdown edited by hand still finds its blocks', () => {
   const at = core.sourceOffset(doc, offsets, handEdited, posOf(doc, 'Last'))
   assert.ok(handEdited.slice(at).startsWith('Last'))
 })
+
+test('a repeated line after a hard break does not become the next block', () => {
+  const editor = makeEditor()
+  const text = '012345678901234567890123  \nSecond block.\n\nSecond block.\n'
+  editor.commands.setContent(core.parseMarkdown(editor, text))
+  const markdown = core.serializeMarkdown(editor, editor.getJSON())
+  const doc = editor.state.doc
+  const offsets = core.blockOffsets(editor, doc, markdown)
+  const second = markdown.lastIndexOf('Second block.')
+  assert.equal(offsets[1], second)
+  const secondPos = doc.child(0).nodeSize + 1
+  assert.equal(core.sourceOffset(doc, offsets, markdown, secondPos), second)
+  assert.equal(core.docPosition(doc, offsets, markdown, second), secondPos)
+})

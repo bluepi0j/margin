@@ -39,6 +39,20 @@ function encodePath(path: string) {
   return encodeURI(decoded).replace(/#/g, '%23')
 }
 
+function escapeMarkdownLabel(text: string): string {
+  return text.replace(/\\/g, '\\\\').replace(/[\[\]]/g, '\\$&')
+}
+
+function escapeMarkdownDestination(destination: string): string {
+  const slashes = destination.replace(/\\/g, '\\\\')
+  if (/\s/.test(destination)) return `<${slashes.replace(/[<>]/g, '\\$&')}>`
+  return slashes.replace(/[()<>]/g, '\\$&')
+}
+
+function escapeMarkdownTitle(title: string): string {
+  return title.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+}
+
 export function resolveImageSrc(src: string): string {
   if (!src) return src
   if (/^[a-z][a-z0-9+.-]*:/i.test(src)) {
@@ -300,6 +314,13 @@ const MarginCodeBlock = CodeBlockLowlight.extend({
 
 // Image: Markdown images are inline; relative paths resolve against the file.
 const MarginImage = Image.extend({
+  renderMarkdown(node: any) {
+    const src = String(node.attrs?.src ?? '')
+    const alt = escapeMarkdownLabel(String(node.attrs?.alt ?? ''))
+    const title = String(node.attrs?.title ?? '')
+    const target = escapeMarkdownDestination(src)
+    return `![${alt}](${target}${title ? ` "${escapeMarkdownTitle(title)}"` : ''})`
+  },
   renderHTML({ HTMLAttributes }) {
     // data-src keeps the path as written, for HTML export.
     return ['img', { ...HTMLAttributes, src: resolveImageSrc(HTMLAttributes.src), 'data-src': HTMLAttributes.src }]
@@ -330,8 +351,8 @@ const marginLink = (getEditor: () => Editor) => Link.extend({
       if (inline.length === 1 && inline[0].type === 'text' && inline[0].text === actual &&
           inline[0].marks?.some(mark => mark.type === 'link' && mark.attrs?.href === href)) return text
     }
-    const target = /\s/.test(href) ? `<${href}>` : href
-    return title ? `[${text}](${target} "${title}")` : `[${text}](${target})`
+    const target = escapeMarkdownDestination(href)
+    return title ? `[${text}](${target} "${escapeMarkdownTitle(title)}")` : `[${text}](${target})`
   },
 }).configure({ openOnClick: false, autolink: true, linkOnPaste: true, enableClickSelection: false })
 
