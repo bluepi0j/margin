@@ -30,7 +30,6 @@ final class NativeDocumentEditor: DocumentEditor {
     private var lastPostedFindRanges: [NSRange] = []
     private var findNeedsRefreshAfterDocumentChange = false
     private var findQueryWorkItem: DispatchWorkItem?
-    private var findRailIsVisible = false
     private let findNotifications = NativeFindNotifications()
     private var selectionObserver: NSObjectProtocol?
     private var scrollObserver: NSObjectProtocol?
@@ -309,7 +308,13 @@ final class NativeDocumentEditor: DocumentEditor {
         } else {
             return setChip(nil)
         }
-        guard let y = yOffset(of: start, in: tv) else { return setChip(nil) }
+        // Scrolling calls this repeatedly while the caret can remain in a code
+        // block or table far from the viewport. Asking TextKit for that anchor's
+        // Y can settle the entire document prefix, which is especially costly
+        // on large notes. The chip only has a visible position when its anchor
+        // has already entered TextKit's viewport pass; otherwise it belongs off
+        // screen and can stay hidden until a later scroll creates its fragment.
+        guard let y = laidOutYOffset(of: start, in: tv) else { return setChip(nil) }
         let width = tv.textContainer?.size.width ?? tv.bounds.width
         var point = tv.convert(NSPoint(x: tv.textContainerOrigin.x + width - 16, y: y + 6), to: scroll)
         if !scroll.isFlipped { point.y = scroll.bounds.height - point.y }
@@ -318,10 +323,18 @@ final class NativeDocumentEditor: DocumentEditor {
 
     private func updateFindBarLayout() {
         guard let container = findBarContainer else { return }
-        // Compute the rail's visibility from the same values SwiftUI uses. A
-        // geometry callback can briefly report the previous document's state
-        // while a large outline lands, which clips the find field's left edge.
-        container.leadingInset = NativeFindBarLayout.leadingInset(railVisible: findRailIsVisible)
+        // Derive this from the current editor state instead of relying on the
+        // SwiftUI geometry callback. During document switches and window
+        // resizes that callback can miss the rail's final visible state, which
+        // leaves the find field on top of the outline ticks.
+        let viewportWidth = container.scrollView?.contentView.bounds.width ?? 0
+        container.leadingInset = NativeFindBarLayout.leadingInset(
+            showsRail: model.showsRail,
+            rawSourceMode: model.rawSource,
+            headingCount: model.railHeadings.count,
+            viewportWidth: viewportWidth,
+            readingWidth: CGFloat(model.readingWidth)
+        )
         guard container.isFindBarVisible else {
             clearFindHighlights()
             return
@@ -337,9 +350,7 @@ final class NativeDocumentEditor: DocumentEditor {
         }
     }
 
-    fileprivate func railVisibilityDidChange(_ visible: Bool) {
-        guard findRailIsVisible != visible else { return }
-        findRailIsVisible = visible
+    fileprivate func railVisibilityDidChange(_: Bool) {
         updateFindBarLayout()
     }
 
@@ -815,6 +826,20 @@ final class NativeDocumentEditor: DocumentEditor {
         return lm.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil).minY + tv.textContainerOrigin.y
     }
 
+    /// Y offset for an anchor TextKit has already laid out. This is the
+    /// scroll-path variant: it never asks TextKit to settle a missing prefix.
+    private func laidOutYOffset(of location: Int, in tv: NSTextView) -> CGFloat? {
+        if let tlm = tv.textLayoutManager, let tcm = tlm.textContentManager,
+           let loc = tcm.location(tcm.documentRange.location, offsetBy: location),
+           let fragment = tlm.textLayoutFragment(for: loc),
+           fragment.state == .layoutAvailable {
+            return fragment.layoutFragmentFrame.minY + tv.textContainerOrigin.y
+        }
+        guard let lm = tv.layoutManager else { return nil }
+        let glyph = lm.glyphIndexForCharacter(at: location)
+        return lm.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil).minY + tv.textContainerOrigin.y
+    }
+
     private func characterIndex(atY y: CGFloat, in tv: NSTextView) -> Int? {
         let point = CGPoint(x: 0, y: y - tv.textContainerOrigin.y)
         if let tlm = tv.textLayoutManager, let tcm = tlm.textContentManager {
@@ -893,9 +918,13 @@ private struct NativeEditorView: View {
         .overlay(alignment: .leading) {
             GeometryReader { geo in
                 // Only where the margin beside the text has room for it.
-                let gutter = (geo.size.width - min(model.readingWidth, geo.size.width)) / 2
-                let railVisible = model.showsRail && !model.rawSource &&
-                    model.railHeadings.count >= 3 && gutter >= 64
+                let railVisible = NativeFindBarLayout.isRailVisible(
+                    showsRail: model.showsRail,
+                    rawSourceMode: model.rawSource,
+                    headingCount: model.railHeadings.count,
+                    viewportWidth: geo.size.width,
+                    readingWidth: CGFloat(model.readingWidth)
+                )
                 Group {
                     if railVisible {
                         OutlineRailView(headings: model.railHeadings, current: model.railCurrent) { index, animated in
@@ -1131,6 +1160,7 @@ private final class NativeFindBarContainer: NSView, NSSearchFieldDelegate {
         guard isFindBarVisible else { return }
 
         let margin: CGFloat = 4
+        let edgeInset: CGFloat = 6
         let gap: CGFloat = 6
         var right = bounds.width - 8
         replaceToggle.frame = NSRect(x: right - 72, y: 7, width: 72, height: 20)
@@ -1143,11 +1173,12 @@ private final class NativeFindBarContainer: NSView, NSSearchFieldDelegate {
         right = previousButton.frame.minX - gap
         resultLabel.frame = NSRect(x: right - 52, y: 6, width: 52, height: 20)
         right = resultLabel.frame.minX - gap
-        searchField.frame = NSRect(x: 0, y: margin, width: max(120, right), height: 24)
+        searchField.frame = NSRect(x: edgeInset, y: margin, width: max(120, right - edgeInset), height: 24)
 
         replaceAllButton.frame = NSRect(x: bounds.width - 52, y: 35, width: 44, height: 24)
         replaceButton.frame = NSRect(x: replaceAllButton.frame.minX - gap - 70, y: 35, width: 70, height: 24)
-        replaceField.frame = NSRect(x: 0, y: 35, width: max(120, replaceButton.frame.minX - gap),
+        replaceField.frame = NSRect(x: edgeInset, y: 35,
+                                    width: max(120, replaceButton.frame.minX - gap - edgeInset),
                                     height: 24)
     }
 
