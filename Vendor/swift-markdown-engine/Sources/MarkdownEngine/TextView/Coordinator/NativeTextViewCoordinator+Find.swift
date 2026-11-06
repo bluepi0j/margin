@@ -179,6 +179,11 @@ extension NativeTextViewCoordinator {
         guard let tv = textView else { return }
         let storage = tv.textStorage
         let fullRange = NSRange(location: 0, length: (tv.string as NSString).length)
+        // [Margin patch] Repainting matches restyles their paragraphs, which can
+        // be far off screen; TextKit then re-estimates the heights above the
+        // viewport and the visible text slides. Without a reveal, keep the
+        // first visible line where it is on screen.
+        let anchor = reveal ? nil : viewportAnchor(in: tv)
 
         clearFindHighlights(in: tv)
 
@@ -201,6 +206,8 @@ extension NativeTextViewCoordinator {
             storage?.addAttribute(.findHighlight, value: true, range: matchRange)
         }
 
+        if let anchor { restore(anchor, in: tv) }
+
         // Scroll the current match into view.
         guard reveal, allRanges.indices.contains(currentIndex) else { return }
         let range = allRanges[currentIndex]
@@ -208,7 +215,58 @@ extension NativeTextViewCoordinator {
         // Use the editor's TextKit 2 reveal path. Layout fragments can carry
         // estimate-only heights until their prefix settles; scrolling from the
         // first matching fragment therefore leaves distant results off-screen.
-        tv.scrollRangeToVisible(range)
+        // [Margin patch] A far jump lands where the estimates put the match;
+        // once that viewport is laid out the estimates are better, so scroll
+        // again until the match is really on screen (a few passes at most).
+        for _ in 0..<4 {
+            tv.scrollRangeToVisible(range)
+            (tv as? NativeTextView)?.layoutViewportImmediately()
+            if isOnScreen(range, in: tv) { break }
+        }
+    }
+
+    /// [Margin patch] Whether `range` starts inside the visible part of the scroll view.
+    private func isOnScreen(_ range: NSRange, in tv: NSTextView) -> Bool {
+        guard let tlm = tv.textLayoutManager, let tcm = tlm.textContentManager,
+              let scrollView = tv.enclosingScrollView,
+              let location = tcm.location(tcm.documentRange.location, offsetBy: range.location),
+              let fragment = tlm.textLayoutFragment(for: location),
+              fragment.state == .layoutAvailable else { return false }
+        let frame = tv.rectInClipView(fragment.layoutFragmentFrame)
+        let cv = scrollView.contentView.bounds
+        return frame.minY >= cv.minY + scrollView.contentInsets.top - 1 && frame.minY < cv.maxY
+    }
+
+    /// [Margin patch] The first line visible below the top inset, and how far
+    /// below the visible top it starts. Only the viewport is looked at.
+    private func viewportAnchor(in tv: NSTextView) -> (location: NSTextLocation, offset: CGFloat)? {
+        guard let tlm = tv.textLayoutManager, let scrollView = tv.enclosingScrollView,
+              let start = tlm.textViewportLayoutController.viewportRange?.location else { return nil }
+        let visibleTop = scrollView.contentView.bounds.minY + scrollView.contentInsets.top
+        var anchor: (location: NSTextLocation, offset: CGFloat)?
+        tlm.enumerateTextLayoutFragments(from: start, options: []) { fragment in
+            let frame = tv.rectInClipView(fragment.layoutFragmentFrame)
+            if frame.maxY <= visibleTop { return true }
+            anchor = (fragment.rangeInElement.location, frame.minY - visibleTop)
+            return false
+        }
+        return anchor
+    }
+
+    /// [Margin patch] Scrolls so the anchor line is back at its offset from the visible top.
+    private func restore(_ anchor: (location: NSTextLocation, offset: CGFloat), in tv: NSTextView) {
+        guard let tlm = tv.textLayoutManager, let scrollView = tv.enclosingScrollView else { return }
+        (tv as? NativeTextView)?.layoutViewportImmediately()
+        tlm.enumerateTextLayoutFragments(from: anchor.location, options: [.ensuresLayout]) { fragment in
+            let cv = scrollView.contentView
+            let target = tv.rectInClipView(fragment.layoutFragmentFrame).minY - anchor.offset
+                - scrollView.contentInsets.top
+            if abs(cv.bounds.minY - target) > 0.5 {
+                cv.scroll(to: NSPoint(x: cv.bounds.minX, y: target))
+                scrollView.reflectScrolledClipView(cv)
+            }
+            return false
+        }
     }
 
     @objc func handleFindClearHighlights(_ notification: Notification) {

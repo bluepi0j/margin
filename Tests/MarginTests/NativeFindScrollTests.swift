@@ -34,6 +34,14 @@ final class NativeFindScrollTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(900))
         // Repainting the highlights after the edit must not scroll to one.
         XCTAssertFalse(matchOnScreen(tv))
+
+        // Next and Previous land on the far match itself, not where the
+        // estimated line heights first put it.
+        for step in ["next", "next", "previous"] {
+            editor.find(step)
+            try await Task.sleep(for: .milliseconds(300))
+            XCTAssertTrue(matchOnScreen(tv), "after \(step)")
+        }
     }
 
     private func matchOnScreen(_ tv: NSTextView) -> Bool {
