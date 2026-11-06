@@ -23,6 +23,27 @@ final class TabTitleTests: XCTestCase {
         XCTAssertEqual(t.map(\.hint), ["a", "b/a"])
     }
 
+    func testFilesOutsideTheFolderShowWhereTheyAre() {
+        let home = URL(fileURLWithPath: "/Users/me")
+        let t = TabTitles.titles(for: [URL(fileURLWithPath: "/Users/me/project/a.md"),
+                                       URL(fileURLWithPath: "/Users/me/Downloads/b.md"),
+                                       URL(fileURLWithPath: "/Users/me/c.md"),
+                                       URL(fileURLWithPath: "/tmp/d.md"),
+                                       nil],
+                                 untitledNames: [nil, nil, nil, nil, "Untitled"],
+                                 folder: URL(fileURLWithPath: "/Users/me/project"), home: home)
+        XCTAssertEqual(t.map(\.title), ["a.md", "b.md", "c.md", "d.md", "Untitled"])
+        XCTAssertEqual(t.map(\.hint), [nil, "~/Downloads", "~", "/tmp", nil])
+        // A visitor with the name of a file inside: the inside one gets its
+        // folder hint, the visitor its location.
+        let clash = TabTitles.titles(for: [URL(fileURLWithPath: "/Users/me/project/notes/todo.md"),
+                                           URL(fileURLWithPath: "/Users/me/Desktop/todo.md")],
+                                     untitledNames: [nil, nil], folder: URL(fileURLWithPath: "/Users/me/project"), home: home)
+        XCTAssertEqual(clash.map(\.hint), ["notes", "~/Desktop"])
+        // No folder open: no location hints.
+        XCTAssertEqual(TabTitles.titles(for: [URL(fileURLWithPath: "/tmp/d.md")], untitledNames: [nil]).map(\.hint), [nil])
+    }
+
     func testUntitled() {
         let t = TabTitles.titles(for: [nil], untitledNames: ["Untitled 2"])
         XCTAssertEqual(t[0].title, "Untitled 2")

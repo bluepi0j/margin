@@ -21,7 +21,8 @@ struct TabBarView: View {
 
     var body: some View {
         let titles = TabTitles.titles(for: workspace.tabs.map { $0.isDraft ? nil : $0.url },
-                                      untitledNames: workspace.tabs.map { $0.isDraft ? $0.displayName : $0.untitledName })
+                                      untitledNames: workspace.tabs.map { $0.isDraft ? $0.displayName : $0.untitledName },
+                                      folder: workspace.folder)
         HStack(spacing: 2) {
             ScrollViewReader { proxy in
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -87,13 +88,16 @@ private struct TabItemView: View {
                     .font(.system(size: 11))
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)
+                    // A long location keeps the folder nearest the file.
+                    .truncationMode(.head)
+                    .layoutPriority(-1)
             }
             closeButton
         }
         .padding(.leading, 11)
         .padding(.trailing, 5)
         .frame(height: 30)
-        .frame(minWidth: 84, maxWidth: 220)
+        .frame(minWidth: 84, maxWidth: hint == nil ? 220 : 300)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(isActive ? Chrome.selected : (hovering ? Chrome.hover : .clear))
@@ -115,7 +119,7 @@ private struct TabItemView: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityAddTraits(isActive ? [.isButton, .isSelected] : .isButton)
-        .accessibilityLabel(title)
+        .accessibilityLabel(hint.map { "\(title), \($0)" } ?? title)
         .accessibilityAction { actions.select(tab.id) }
         .accessibilityAction(named: "Close") { actions.close(tab.id) }
     }
