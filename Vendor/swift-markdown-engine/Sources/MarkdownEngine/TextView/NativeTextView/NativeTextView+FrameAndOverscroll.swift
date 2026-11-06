@@ -185,9 +185,78 @@ extension NativeTextView {
         return max(ceil(rawHeight + (textContainerInset.height * 2)), minimumContentHeight)
     }
 
-    /// Fixed reading-column width = wrap width + horizontal insets on both sides.
+    /// Reading-column width = wrap width + horizontal insets on both sides.
+    /// [Margin patch] The wrap width is the container's (see `wrapWidth`), which
+    /// can be narrower than `readingWidth` in a narrow viewport.
     var readingColumnWidth: CGFloat {
-        (configuration.readingWidth ?? 0) + configuration.textInsets.horizontal * 2
+        let wrap = configuration.readingWidth == nil ? 0 : (textContainer?.size.width ?? configuration.readingWidth ?? 0)
+        return wrap + configuration.textInsets.horizontal * 2
+    }
+
+    /// [Margin patch] Room kept on each side of the column when the viewport is
+    /// narrower than the reading width.
+    static let readingSideMargin: CGFloat = 32
+
+    /// [Margin patch] The wrap width for a viewport `clipWidth` wide: the
+    /// reading width, or less when that doesn't fit (a CSS max-width, like the
+    /// web editor), never below a readable minimum. nil without a reading width.
+    func wrapWidth(forClipWidth clipWidth: CGFloat) -> CGFloat? {
+        guard let readingWidth = configuration.readingWidth else { return nil }
+        guard clipWidth > 1 else { return readingWidth }
+        let room = clipWidth - configuration.textInsets.horizontal * 2 - Self.readingSideMargin * 2
+        return max(min(readingWidth, room), min(readingWidth, 240))
+    }
+
+    /// [Margin patch] Sets the container to `wrapWidth(forClipWidth:)`;
+    /// returns whether the text has to re-wrap.
+    @discardableResult
+    func applyWrapWidth(forClipWidth clipWidth: CGFloat) -> Bool {
+        guard let textContainer else { return false }
+        guard let width = wrapWidth(forClipWidth: clipWidth) else {
+            textContainer.widthTracksTextView = true
+            return false
+        }
+        textContainer.widthTracksTextView = false
+        guard abs(textContainer.size.width - width) > 0.5 else { return false }
+        textContainer.size = NSSize(width: width, height: .greatestFiniteMagnitude)
+        return true
+    }
+
+    /// [Margin patch] Re-wraps the column for the viewport's current width (or
+    /// a changed reading width), then re-measures and re-centers it.
+    func rewrapReadingColumn(in scrollView: NSScrollView) {
+        pendingRewrap?.cancel()
+        pendingRewrap = nil
+        let clipWidth = scrollView.contentView.bounds.width
+        guard applyWrapWidth(forClipWidth: clipWidth) else {
+            centerReadingColumn(forClipWidth: clipWidth)
+            return
+        }
+        if let tlm = textLayoutManager { tlm.invalidateLayout(for: tlm.documentRange) }
+        applyManagedFrameSize(width: configuration.readingWidth != nil ? readingColumnWidth : clipWidth)
+        recalcOverscroll(for: scrollView)
+        centerReadingColumn(forClipWidth: clipWidth)
+        (delegate as? NativeTextViewCoordinator)?.didEnsureLayoutForCurrentDocument = false
+        needsDisplay = true
+    }
+
+    /// [Margin patch] During a window resize, re-wrap once it pauses: each
+    /// re-wrap lays the whole document out again.
+    func scheduleRewrap(in scrollView: NSScrollView) {
+        guard configuration.readingWidth != nil else { return }
+        let clipWidth = scrollView.contentView.bounds.width
+        guard let width = wrapWidth(forClipWidth: clipWidth), abs((textContainer?.size.width ?? width) - width) > 0.5 else {
+            pendingRewrap?.cancel()
+            pendingRewrap = nil
+            return
+        }
+        pendingRewrap?.cancel()
+        let work = DispatchWorkItem { [weak self, weak scrollView] in
+            guard let self, let scrollView else { return }
+            self.rewrapReadingColumn(in: scrollView)
+        }
+        pendingRewrap = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
     }
 
     func applyManagedFrameSize(width: CGFloat) {

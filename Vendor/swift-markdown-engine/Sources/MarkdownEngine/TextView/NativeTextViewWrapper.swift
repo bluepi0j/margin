@@ -336,6 +336,8 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         container.autoresizingMask = [.width]
         container.clipsToBounds = true
         container.textView = textView
+        // [Margin patch] Narrower than the reading width when the viewport is.
+        textView.applyWrapWidth(forClipWidth: vpSize.width)
         let initialWidth = configuration.readingWidth != nil ? textView.readingColumnWidth : vpSize.width
         textView.frame = NSRect(x: 0, y: 0, width: initialWidth, height: textView.frame.height)
         container.addSubview(textView)
@@ -375,6 +377,7 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
             // Refresh code-block overlays only on real viewport width changes, not on TextKit height-only echoes during typing.
             let newWidth = scrollView.contentView.bounds.width
             if abs(newWidth - lastObservedViewportWidth) > 0.5 {
+                let firstWidth = lastObservedViewportWidth <= 1
                 lastObservedViewportWidth = newWidth
                 // Re-center the column by position (no redraw) so it stays smooth during live resize.
                 // Read readingWidth from the live textView.configuration (a class, captured by
@@ -382,6 +385,9 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
                 // makeNSView time — the embedder may change readingWidth between updates.
                 if textView.configuration.readingWidth != nil {
                     textView.centerReadingColumn(forClipWidth: newWidth)
+                    // [Margin patch] Fit the column to a narrower (or wider again) viewport.
+                    // The first real width (the view just got laid out) re-wraps at once.
+                    if firstWidth { textView.rewrapReadingColumn(in: scrollView) } else { textView.scheduleRewrap(in: scrollView) }
                 }
                 context.coordinator.didEnsureLayoutForCurrentDocument = false
                 context.coordinator.updateCodeBlockSelection(textView: textView)
@@ -593,25 +599,10 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         // [Margin patch] The wrap width is fixed in makeNSView; re-apply it when the
         // embedder changes `readingWidth` later (Settings › Line width), the same
         // way makeNSView set it up, then re-measure and re-center the column.
-        if textView.configuration.readingWidth != configuration.readingWidth,
-           let textContainer = textView.textContainer {
+        if textView.configuration.readingWidth != configuration.readingWidth {
             textView.configuration.readingWidth = configuration.readingWidth
             context.coordinator.configuration.readingWidth = configuration.readingWidth
-            if let readingWidth = configuration.readingWidth {
-                textContainer.widthTracksTextView = false
-                textContainer.size = NSSize(width: readingWidth, height: .greatestFiniteMagnitude)
-            } else {
-                textContainer.widthTracksTextView = true
-            }
-            if let tlm = textView.textLayoutManager {
-                tlm.invalidateLayout(for: tlm.documentRange)
-            }
-            let clipWidth = nsView.contentView.bounds.width
-            textView.applyManagedFrameSize(width: configuration.readingWidth != nil ? textView.readingColumnWidth : clipWidth)
-            textView.recalcOverscroll(for: nsView)
-            textView.centerReadingColumn(forClipWidth: clipWidth)
-            context.coordinator.didEnsureLayoutForCurrentDocument = false
-            textView.needsDisplay = true
+            textView.rewrapReadingColumn(in: nsView)
         }
         // Refresh services/theme when the embedder hands us a new configuration
         // (e.g. when the available wiki-link targets change). Cheap pointer-/

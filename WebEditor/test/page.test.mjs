@@ -264,3 +264,17 @@ test('export leaves out the changes since the last commit', async () => {
   margin.setDiffBase('diff-export', null)
   margin.close('diff-export')
 })
+
+test('the source box follows a new line width', async () => {
+  margin.open('source-width', 'word '.repeat(400) + '\n', '', true)
+  margin.setSourceMode(true)
+  const area = document.querySelector('#source')
+  area.style.height = '10px'
+  margin.settings({ width: 500 })
+  await new Promise(r => setTimeout(r, 50))
+  // happy-dom has no layout, so scrollHeight is 0: the box was re-measured
+  // when its explicit 10px height was replaced.
+  assert.notEqual(area.style.height, '10px')
+  margin.setSourceMode(false)
+  margin.close('source-width')
+})

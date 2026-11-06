@@ -347,9 +347,15 @@ function goToPlace(place: Place) {
   }))
 }
 
+// A narrower or wider window re-wraps the source text too.
+window.addEventListener('resize', () => { if (sourceMode) autosizeSource() })
+
 function autosizeSource() {
+  // 'auto' collapses the box for a moment: keep the page where it was.
+  const top = document.scrollingElement!.scrollTop
   sourceArea.style.height = 'auto'
   sourceArea.style.height = `${sourceArea.scrollHeight}px`
+  document.scrollingElement!.scrollTop = top
 }
 sourceArea.addEventListener('input', autosizeSource)
 
@@ -598,7 +604,11 @@ const api = {
       }
       root.setProperty('--font-body', stacks[s.font] ?? stacks.sans)
     }
-    requestAnimationFrame(() => rail.rebuild())
+    requestAnimationFrame(() => {
+      rail.rebuild()
+      // The source text re-wraps to the new width: its box has to follow.
+      if (sourceMode) autosizeSource()
+    })
   },
 
   /** Scrolls to the n-th heading of the outline and puts the caret there. */

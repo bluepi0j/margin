@@ -36,6 +36,44 @@ final class NativeReadingWidthTests: XCTestCase {
         XCTAssertEqual(textView.frame.width, textView.readingColumnWidth)
     }
 
+    /// A reading width wider than the window wraps to the window (like the
+    /// web editor's max-width), and re-wraps when the window grows again.
+    func testColumnFitsANarrowerViewport() async throws {
+        _ = NSApplication.shared
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 700, height: 600),
+                              styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let text = String(repeating: "words that wrap ", count: 300)
+        let host = NSHostingView(rootView: NativeTextViewWrapper(
+            text: .constant(text), configuration: MarkdownEditorConfiguration(readingWidth: 900)))
+        host.frame = NSRect(x: 0, y: 0, width: 700, height: 600)
+        window.contentView = host
+        host.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(100))
+        let textView = try XCTUnwrap(Self.textView(in: host))
+        let scrollView = try XCTUnwrap(textView.enclosingScrollView)
+        let wrap = try XCTUnwrap(textView.textContainer?.size.width)
+        XCTAssertLessThan(wrap, 900)
+        XCTAssertLessThanOrEqual(textView.frame.maxX, scrollView.contentView.bounds.width + 0.5)
+
+        // Wider window: back to the full reading width, after the resize pauses.
+        window.setContentSize(NSSize(width: 1400, height: 600))
+        host.frame = NSRect(x: 0, y: 0, width: 1400, height: 600)
+        host.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(400))
+        XCTAssertEqual(textView.textContainer?.size.width, 900)
+        XCTAssertEqual(textView.frame.width, textView.readingColumnWidth)
+
+        // And narrower again.
+        window.setContentSize(NSSize(width: 600, height: 600))
+        host.frame = NSRect(x: 0, y: 0, width: 600, height: 600)
+        host.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(400))
+        XCTAssertLessThan(try XCTUnwrap(textView.textContainer?.size.width), wrap)
+        XCTAssertLessThanOrEqual(textView.frame.maxX, scrollView.contentView.bounds.width + 0.5)
+    }
+
     private static func textView(in view: NSView) -> NativeTextView? {
         if let tv = view as? NativeTextView { return tv }
         for sub in view.subviews { if let tv = textView(in: sub) { return tv } }

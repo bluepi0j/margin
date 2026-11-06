@@ -24,6 +24,8 @@ final class NativeTextView: NSTextView {
     var isApplyingManagedFrameSize = false
     /// Set on switch/resize to force full-layout height measurement until the cascade settles.
     var pendingFullLayoutMeasure = false
+    /// [Margin patch] A re-wrap to a new viewport width, run once resizing pauses.
+    var pendingRewrap: DispatchWorkItem?
     /// Coalesces wide-table overlay updates to once per runloop (resize fires many per frame).
     var pendingWideTableOverlayUpdate = false
     /// Coalesces table restyles to the latest width once per run-loop turn.

@@ -39,6 +39,11 @@ so Margin can carry small local patches; everything Margin added is marked
 - `TextView/NativeTextViewWrapper.swift` — `updateNSView` re-applies a changed
   `readingWidth` (the wrap width was only set in `makeNSView`, so Settings ›
   Line width had no effect until the editor was recreated).
+- `TextView/NativeTextView/NativeTextView+FrameAndOverscroll.swift` and
+  `NativeTextViewWrapper.swift` — the wrap width is the reading width or, when
+  the viewport is narrower (a small window, the sidebar shown), what fits it
+  (`wrapWidth(forClipWidth:)`), like a CSS max-width; the column re-wraps when
+  the viewport width changes, once a live resize pauses.
 
 The test targets and demo app are left out. To update: copy a newer release's
 `Sources/`, `Package.swift` (minus test targets) and `LICENSE` over this folder
