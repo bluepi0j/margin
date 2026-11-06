@@ -17,6 +17,7 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
     /// The block-based observer for sidebar resizes; removed on close.
     private var splitObserver: NSObjectProtocol?
     private var treeReloadScheduled = false
+    private var changesRefreshScheduled = false
     private var treeReloadID = UUID()
     private var treeShowsAllFiles = Preferences.shared.showAllFiles
     private var closeConfirmed = false
@@ -101,6 +102,7 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
             chromeActions: ChromeActions(
                 toggleSidebar: { [weak self] in self?.toggleSidebarVisibility(nil) },
                 toggleSource: { [weak self] in self?.toggleSourceMode(nil) },
+                toggleChanges: { [weak self] in self?.toggleChanges(nil) },
                 run: { [weak self] command, args in self?.runCommand(command, args) },
                 pickImage: { [weak self] in self?.insertImage(nil) }
             ),
@@ -168,6 +170,7 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
         area.rootView = makeAreaView()
         for tab in workspace.tabs {
             editor.open(id: tab.id, markdown: tab.unsavedText ?? tab.diskText ?? "", documentURL: tab.url, activate: false)
+            if let base = tab.diffBase { editor.setDiffBase(id: tab.id, base: base) }
         }
         if let id = workspace.activeTabID { editor.activate(id: id) }
         focusEditor()
@@ -185,6 +188,7 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
                 // them block closing and quitting forever.
                 tab.isEditing = false
                 editor.open(id: tab.id, markdown: tab.unsavedText ?? tab.diskText ?? "", documentURL: tab.url, activate: false)
+                if let base = tab.diffBase { editor.setDiffBase(id: tab.id, base: base) }
             }
             if let id = workspace.activeTabID { editor.activate(id: id) }
         case .edited(let id):
@@ -208,6 +212,8 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
         case .outline(let items, let words):
             if workspace.outline != items { workspace.outline = items }
             workspace.wordCount = words
+        case .changes(let id, let count):
+            if id == workspace.activeTabID, workspace.changeCount != count { workspace.changeCount = count }
         }
     }
 
@@ -613,6 +619,7 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func diskChanged(_ paths: [String]) {
+        if paths.contains(where: { $0.contains("/.git/") || $0.hasSuffix("/.git") }) { scheduleChangesRefresh() }
         if let folder = workspace.folder?.resolvingSymlinksInPath().canonicalPath,
            paths.contains(where: { URL(fileURLWithPath: $0).canonicalPath.hasPrefix(folder + "/") && !$0.contains("/.git/") }) {
             scheduleTreeReload()
@@ -746,6 +753,67 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
         if window.title.isEmpty { window.title = "Margin" }
         window.representedURL = tab?.url
         revealActiveInTree()
+        refreshChanges()
+    }
+
+    // MARK: Changes since the last commit
+
+    @objc func toggleChanges(_ sender: Any?) {
+        guard workspace.changesAvailable else { return NSSound.beep() }
+        workspace.showChanges.toggle()
+        if workspace.showChanges {
+            refreshChanges()
+        } else {
+            for tab in workspace.tabs where tab.diffBase != nil {
+                tab.diffBase = nil
+                editor.setDiffBase(id: tab.id, base: nil)
+            }
+            workspace.changeCount = nil
+        }
+    }
+
+    /// Offers the changes button for a file in a git working tree and, while
+    /// changes are shown, (re)reads its committed text: the tab may be new,
+    /// or a commit may have happened since.
+    private func refreshChanges() {
+        let tab = workspace.activeTab
+        let available = tab?.url.map { GitBaseline.repositoryRoot(for: $0) != nil } ?? false
+        if workspace.changesAvailable != available { workspace.changesAvailable = available }
+        if tab?.diffBase == nil, workspace.changeCount != nil { workspace.changeCount = nil }
+        guard workspace.showChanges, available, let tab, let url = tab.url else { return }
+        let id = tab.id
+        Task.detached(priority: .userInitiated) {
+            let result = GitBaseline.headText(for: url)
+            await MainActor.run { [weak self] in
+                guard let self, self.workspace.showChanges, let tab = self.workspace.tab(id: id), tab.url == url else { return }
+                switch result {
+                case .committed(let text):
+                    guard tab.diffBase != text else { return }
+                    tab.diffBase = text
+                    self.editor.setDiffBase(id: id, base: text)
+                case .unavailable:
+                    if tab.diffBase != nil {
+                        tab.diffBase = nil
+                        self.editor.setDiffBase(id: id, base: nil)
+                    }
+                    if self.workspace.activeTabID == id {
+                        self.workspace.changesAvailable = false
+                        self.workspace.changeCount = nil
+                    }
+                }
+            }
+        }
+    }
+
+    /// Something in a `.git` folder changed (a commit, a checkout): refresh
+    /// once things settle.
+    private func scheduleChangesRefresh() {
+        guard workspace.showChanges, !changesRefreshScheduled else { return }
+        changesRefreshScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            self?.changesRefreshScheduled = false
+            self?.refreshChanges()
+        }
     }
 
     // MARK: Links, drops, images
@@ -1167,6 +1235,9 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
         case #selector(toggleFocusMode(_:)):
             item.state = isInFocusMode ? .on : .off
             return true
+        case #selector(toggleChanges(_:)):
+            item.state = workspace.showChanges ? .on : .off
+            return workspace.changesAvailable
         case #selector(toggleSidebarVisibility(_:)):
             item.title = sidebarItem.isCollapsed ? "Show Sidebar" : "Hide Sidebar"
             return true
@@ -1206,6 +1277,7 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
     func windowDidBecomeKey(_ notification: Notification) {
         // Catch changes made while we were in the background.
         if !workspace.tabs.isEmpty { diskChanged([]) }
+        refreshChanges()
     }
 
     // MARK: Session

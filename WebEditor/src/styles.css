@@ -22,6 +22,12 @@
   --shadow: 0 10px 30px rgba(0, 0, 0, 0.14), 0 1px 3px rgba(0, 0, 0, 0.08);
   --find-bg: rgba(255, 214, 10, 0.45);
   --find-current: rgba(255, 149, 0, 0.75);
+  --diff-add-bg: rgba(52, 199, 89, 0.11);
+  --diff-add-word: rgba(52, 199, 89, 0.32);
+  --diff-add-bar: #34c759;
+  --diff-del-bg: rgba(255, 59, 48, 0.08);
+  --diff-del-word: rgba(255, 59, 48, 0.26);
+  --diff-del-bar: #ff3b30;
 
   --hl-keyword: #cf222e;
   --hl-string: #0a3069;
@@ -55,6 +61,12 @@
     --shadow: 0 10px 30px rgba(0, 0, 0, 0.45), 0 1px 3px rgba(0, 0, 0, 0.3);
     --find-bg: rgba(255, 214, 10, 0.3);
     --find-current: rgba(255, 149, 0, 0.65);
+    --diff-add-bg: rgba(48, 209, 88, 0.12);
+    --diff-add-word: rgba(48, 209, 88, 0.34);
+    --diff-add-bar: #30d158;
+    --diff-del-bg: rgba(255, 69, 58, 0.1);
+    --diff-del-word: rgba(255, 69, 58, 0.32);
+    --diff-del-bar: #ff453a;
 
     --hl-keyword: #ff7b72;
     --hl-string: #a5d6ff;
@@ -630,6 +642,89 @@ body.cmd-held .prose a {
 
 .find-match.current {
   background: var(--find-current);
+}
+
+/* Changes since the last commit (diff.ts). The tints reach past the text
+   column with shadows, so showing them never moves the text. They are mixed
+   with the page colour (not see-through), so the side bar shadow under them
+   shows only where it sticks out. */
+:root {
+  --diff-add-tint: color-mix(in srgb, var(--diff-add-bar) 11%, var(--bg));
+  --diff-del-tint: color-mix(in srgb, var(--diff-del-bar) 8%, var(--bg));
+}
+.diff-added {
+  background: var(--diff-add-tint);
+  box-shadow: -10px 0 0 var(--diff-add-tint), 10px 0 0 var(--diff-add-tint), -13px 0 0 var(--diff-add-bar);
+  border-radius: 1px;
+}
+.diff-word-added {
+  background: var(--diff-add-word);
+  border-radius: 2px;
+}
+.diff-ghost {
+  background: var(--diff-del-tint);
+  box-shadow: -10px 0 0 var(--diff-del-tint), 10px 0 0 var(--diff-del-tint), -13px 0 0 var(--diff-del-bar);
+  color: var(--text-secondary);
+  cursor: default;
+}
+.diff-ghost > * + * { margin-top: 0.75em; }
+.diff-ghost > :first-child { margin-top: 0; }
+.diff-ghost > :last-child { margin-bottom: 0; }
+.diff-ghost-items > ul, .diff-ghost-items > ol { margin: 0; padding-left: 0; }
+.diff-ghost-items > ul:not([data-type="taskList"]) { list-style-type: disc; }
+.diff-ghost-items > ol { list-style-type: decimal; }
+/* List items: reach left past the bullet, so the bar doesn't cut through it. */
+li.diff-added {
+  box-shadow: -1.6em 0 0 var(--diff-add-tint), 10px 0 0 var(--diff-add-tint), calc(-1.6em - 3px) 0 0 var(--diff-add-bar);
+}
+.diff-ghost-items {
+  box-shadow: -1.6em 0 0 var(--diff-del-tint), 10px 0 0 var(--diff-del-tint), calc(-1.6em - 3px) 0 0 var(--diff-del-bar);
+}
+/* Removed code: the code block look without its editing chrome. */
+.diff-ghost pre {
+  margin: 0;
+  padding: 12px 18px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--code-bg) 70%, transparent);
+  font-family: var(--font-mono);
+  font-size: 0.84em;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+.diff-ghost pre code { background: none; padding: 0; font-size: inherit; }
+.diff-word-removed {
+  background: var(--diff-del-word);
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, var(--diff-del-bar) 70%, transparent);
+  border-radius: 2px;
+}
+.prose > .diff-control, .diff-control {
+  position: relative;
+  height: 0;
+  margin: 0 !important;
+  padding: 0;
+  list-style: none;
+}
+.diff-restore {
+  position: absolute;
+  right: -46px;
+  top: 2px;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  background: var(--bg);
+  color: var(--text-secondary);
+  font: 14px/22px var(--font-text);
+  cursor: pointer;
+  opacity: 0.55;
+  transition: opacity 0.12s;
+}
+.diff-restore:hover {
+  opacity: 1;
+  color: var(--text);
+  border-color: var(--panel-border);
 }
 
 /* Word count now lives in the native tab bar; kept for the page alone. */

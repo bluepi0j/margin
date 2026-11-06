@@ -358,6 +358,8 @@ public struct MarkdownEditorServices: Sendable {
     /// Draws fenced code blocks of some languages (e.g. ```mermaid) as
     /// images; `nil` leaves every code block as highlighted text. [Margin patch]
     public var codeBlockRenderer: (any CodeBlockRenderer)?
+    /// Host marks laid over the styled text; see `MarkdownDecorator`. [Margin patch]
+    public var decorator: (any MarkdownDecorator)?
     public var bus: MarkdownEditorBus
 
     public init(
@@ -366,6 +368,7 @@ public struct MarkdownEditorServices: Sendable {
         syntaxHighlighter: any SyntaxHighlighter = PlainTextSyntaxHighlighter(),
         latex: any LatexRenderer = NoOpLatexRenderer(),
         codeBlockRenderer: (any CodeBlockRenderer)? = nil,
+        decorator: (any MarkdownDecorator)? = nil,
         bus: MarkdownEditorBus = .default
     ) {
         self.wikiLinks = wikiLinks
@@ -373,6 +376,7 @@ public struct MarkdownEditorServices: Sendable {
         self.syntaxHighlighter = syntaxHighlighter
         self.latex = latex
         self.codeBlockRenderer = codeBlockRenderer
+        self.decorator = decorator
         self.bus = bus
     }
 

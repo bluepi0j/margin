@@ -213,3 +213,54 @@ test('outline rail keeps its current-section marker after rebuilding at the same
     margin.close('rail-rebuild')
   }
 })
+
+test('changes since the last commit follow tabs and source mode', async () => {
+  const changes = () => messages.filter(m => m.type === 'changes')
+  margin.open('diff-a', '# A\n\nNew text.\n', '', true)
+  margin.setDiffBase('diff-a', '# A\n\nOld text.\n')
+  assert.deepEqual(changes().at(-1), { type: 'changes', id: 'diff-a', count: 1 })
+  assert.equal(document.querySelectorAll('.diff-added').length, 1)
+  assert.equal(document.querySelectorAll('.diff-ghost').length, 1)
+
+  // Another tab without a base: no marks, and "not showing" (-1) for it.
+  margin.open('diff-b', 'Plain\n', '', true)
+  assert.deepEqual(changes().at(-1), { type: 'changes', id: 'diff-b', count: -1 })
+  assert.equal(document.querySelectorAll('.diff-added, .diff-ghost').length, 0)
+
+  // Back: the marks come back with the tab; the base can be set while hidden.
+  margin.setDiffBase('diff-b', 'Plain\n\nRemoved.\n')
+  margin.activate('diff-a')
+  assert.deepEqual(changes().at(-1), { type: 'changes', id: 'diff-a', count: 1 })
+  assert.equal(document.querySelectorAll('.diff-added').length, 1)
+  margin.activate('diff-b')
+  assert.deepEqual(changes().at(-1), { type: 'changes', id: 'diff-b', count: 1 })
+  assert.equal(document.querySelectorAll('.diff-ghost').length, 1)
+
+  // Source mode shows plain text: no count while it's on.
+  margin.setSourceMode(true)
+  assert.equal(changes().at(-1).count, -1)
+  margin.setSourceMode(false)
+  assert.equal(changes().at(-1).count, 1)
+
+  // Restoring saves like any other edit; the decorations never reach the Markdown.
+  document.querySelector('.diff-restore').dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+  assert.equal(margin.getMarkdown('diff-b'), 'Plain\n\nRemoved.\n')
+  assert.equal(changes().at(-1).count, 0)
+
+  margin.setDiffBase('diff-b', null)
+  assert.equal(changes().at(-1).count, -1)
+  assert.equal(document.querySelectorAll('.diff-restore').length, 0)
+  margin.close('diff-a')
+  margin.close('diff-b')
+})
+
+test('export leaves out the changes since the last commit', async () => {
+  margin.open('diff-export', '# Title\n\nThe new words.\n', '', true)
+  margin.setDiffBase('diff-export', '# Title\n\nThe old words.\n\n## Gone\n')
+  assert.ok(document.querySelector('.diff-ghost'))
+  const result = await margin.exportHTML()
+  assert.doesNotMatch(result.body, /diff-|Gone|old words|↺/)
+  assert.match(result.body, /The new words\./)
+  margin.setDiffBase('diff-export', null)
+  margin.close('diff-export')
+})

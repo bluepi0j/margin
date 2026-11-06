@@ -20,17 +20,20 @@ public enum TextFile {
     public static func read(_ url: URL) throws -> Snapshot {
         let data = try Data(contentsOf: url)
         let modified = try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
-        if data.isEmpty { return Snapshot(text: "", modified: modified) }
-        if data.prefix(512).contains(0), !(data.starts(with: [0xFF, 0xFE]) || data.starts(with: [0xFE, 0xFF])) {
-            throw Failure.notText(url)
-        }
+        guard let text = decode(data) else { throw Failure.notText(url) }
+        return Snapshot(text: text, modified: modified)
+    }
+
+    /// File bytes as text, the way `read` decodes them; nil for binary data.
+    public static func decode(_ data: Data) -> String? {
+        if data.isEmpty { return "" }
         let hasUTF16BOM = data.starts(with: [0xFF, 0xFE]) || data.starts(with: [0xFE, 0xFF])
+        if data.prefix(512).contains(0), !hasUTF16BOM { return nil }
         var text = String(data: data, encoding: .utf8)
             ?? (hasUTF16BOM ? String(data: data, encoding: .utf16) : nil)
             ?? String(data: data, encoding: .isoLatin1)
         if text?.hasPrefix("\u{FEFF}") == true { text?.removeFirst() }
-        guard let text else { throw Failure.notText(url) }
-        return Snapshot(text: text, modified: modified)
+        return text
     }
 
     /// Writes atomically (temp file + rename) so a crash never leaves half a file.

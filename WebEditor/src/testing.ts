@@ -2,3 +2,4 @@
 export { createEditor, runCommand, selectionState } from './editor'
 export { parseMarkdown, serializeMarkdown, escapeText, splitFrontMatter } from './markdown'
 export { blockOffsets, sourceOffset, docPosition } from './sourcemap'
+export { computeHunks, diffHunks, revertHunk, setDiffBase, wordDiff, tokens, matches } from './diff'

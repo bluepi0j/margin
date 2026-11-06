@@ -140,6 +140,7 @@ enum MainMenu {
         m.addItem(item("Hide Sidebar", #selector(WorkspaceWindowController.toggleSidebarVisibility(_:)), "s", [.command, .control]))
         m.addItem(item("Focus Mode", #selector(WorkspaceWindowController.toggleFocusMode(_:)), "\r", [.command, .shift]))
         m.addItem(item("Markdown Source", #selector(WorkspaceWindowController.toggleSourceMode(_:)), "m", [.command, .shift]))
+        m.addItem(item("Changes Since Last Commit", #selector(WorkspaceWindowController.toggleChanges(_:)), "d", [.command, .shift]))
         m.addItem(.separator())
         m.addItem(item("Bigger Text", #selector(AppDelegate.zoomIn(_:)), "+"))
         m.addItem(item("Smaller Text", #selector(AppDelegate.zoomOut(_:)), "-"))

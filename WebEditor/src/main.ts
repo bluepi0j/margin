@@ -17,6 +17,7 @@ import { closePopover } from './popover'
 import { BubbleBar } from './bubble'
 import { OutlineRail } from './rail'
 import { blockOffsets, docPosition, sourceOffset, textareaOffsetAtY, textareaOffsetY } from './sourcemap'
+import { diffHunks, setChangesListener, setDiffBase } from './diff'
 
 interface Doc {
   id: string
@@ -31,6 +32,8 @@ interface Doc {
   source: string | null
   /** What `source` was when source mode started, to tell if it was edited. */
   sourceBase: string | null
+  /** The committed document to show changes against (git), when shown. */
+  diffBase: PMNode | null
 }
 
 declare global {
@@ -202,8 +205,18 @@ function active(): Doc | undefined {
 function stateFor(doc: Doc): EditorState {
   if (!doc.state) {
     doc.state = EditorState.create({ doc: buildDoc(doc.markdown), plugins: editor.state.plugins })
+    if (doc.diffBase) doc.state = doc.state.apply(setDiffBase(doc.state.tr, doc.diffBase))
   }
   return doc.state
+}
+
+// Changes since the last commit, for the count in the native header
+// (-1: not showing changes).
+setChangesListener(count => { if (activeId) post({ type: 'changes', id: activeId, count }) })
+function postChanges() {
+  const doc = active()
+  if (!doc) return
+  post({ type: 'changes', id: doc.id, count: doc.diffBase && !sourceMode ? diffHunks(editor.state).length : -1 })
 }
 
 /** Markdown -> a schema-valid ProseMirror document. */
@@ -281,6 +294,7 @@ function show(doc: Doc | undefined) {
   findBar.refresh()
   scheduleState()
   scheduleOutline()
+  postChanges()
   const top = doc.scrollTop
   requestAnimationFrame(() => (document.scrollingElement!.scrollTop = top))
 }
@@ -363,7 +377,8 @@ host.addEventListener('click', e => {
   if (a) e.preventDefault()
   const ref = target.closest('sup[data-type="footnote-ref"]') as HTMLElement | null
   if (ref && e.metaKey) {
-    const def = host.querySelector(`div[data-type="footnote-def"][data-label="${CSS.escape(ref.dataset.label ?? '')}"]`)
+    const def = [...host.querySelectorAll(`div[data-type="footnote-def"][data-label="${CSS.escape(ref.dataset.label ?? '')}"]`)]
+      .find(d => !d.closest('.diff-ghost'))
     def?.scrollIntoView({ block: 'center', behavior: 'smooth' })
   }
 })
@@ -423,7 +438,7 @@ const api = {
   open(id: string, markdown: string, baseURL = '', activate = true) {
     let doc = docs.get(id)
     if (!doc) {
-      doc = { id, markdown, baseURL, state: null, scrollTop: 0, pending: false, source: null, sourceBase: null }
+      doc = { id, markdown, baseURL, state: null, scrollTop: 0, pending: false, source: null, sourceBase: null, diffBase: null }
       docs.set(id, doc)
     }
     if (activate) api.activate(id)
@@ -517,6 +532,22 @@ const api = {
   },
 
   flush,
+
+  /**
+   * Shows what changed since `markdown` (the committed version), or stops
+   * showing changes with null.
+   */
+  setDiffBase(id: string, markdown: string | null) {
+    const doc = docs.get(id)
+    if (!doc) return
+    doc.diffBase = markdown === null ? null : buildDoc(markdown)
+    if (id === activeId && !sourceMode) {
+      editor.view.dispatch(setDiffBase(editor.state.tr, doc.diffBase))
+    } else if (doc.state) {
+      doc.state = doc.state.apply(setDiffBase(doc.state.tr, doc.diffBase))
+    }
+    if (id === activeId) postChanges()
+  },
 
   command(name: string, args?: any) {
     if (!activeId) return false
@@ -643,6 +674,10 @@ const api = {
     clearTimeout(imageTimeout)
     const clone = host.querySelector('.ProseMirror')!.cloneNode(true) as HTMLElement
     clone.querySelectorAll('.code-header, .ProseMirror-separator, .ProseMirror-trailingBreak, .ProseMirror-gapcursor').forEach(n => n.remove())
+    // Changes since the last commit are a view of the document, not part of it.
+    clone.querySelectorAll('.diff-ghost, .diff-control').forEach(n => n.remove())
+    clone.querySelectorAll('.diff-word-added').forEach(n => n.replaceWith(...n.childNodes))
+    clone.querySelectorAll('.diff-added').forEach(n => n.classList.remove('diff-added'))
     clone.querySelectorAll('[contenteditable]').forEach(n => n.removeAttribute('contenteditable'))
     clone.querySelectorAll('img[data-src]').forEach(img => {
       img.setAttribute('src', img.getAttribute('data-src')!)

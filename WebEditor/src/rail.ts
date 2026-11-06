@@ -77,7 +77,9 @@ export class OutlineRail {
   rebuild() {
     const page = this.page()
     this.observe(page)
-    const all = page && this.enabled ? [...page.querySelectorAll<HTMLElement>('h1, h2, h3')] : []
+    // Headings of removed text (git changes) aren't part of the document.
+    const all = page && this.enabled
+      ? [...page.querySelectorAll<HTMLElement>('h1, h2, h3')].filter(h => !h.closest('.diff-ghost')) : []
     // More headings than fit at the tightest pitch: sample them evenly, so the
     // rail stays proportional to the whole document instead of being cut off.
     const capacity = Math.max(3, Math.floor(((window.innerHeight * 0.9) / PITCH[0] + 1) / 2))

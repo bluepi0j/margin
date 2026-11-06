@@ -25,6 +25,8 @@ final class Tab: Identifiable {
     /// Created by ⌘N as "Untitled.md": renamed after its first line once the
     /// user moves on, like Scratch names notes.
     var autoName = false
+    /// The committed text last handed to the editor for showing changes.
+    var diffBase: String?
 
     init(url: URL?, untitledName: String? = nil, diskText: String? = nil) {
         self.url = url
@@ -54,6 +56,12 @@ final class Workspace {
     var selection = EditorSelection()
     var isQuickOpenVisible = false
     var sourceMode = false
+    /// Changes since the last git commit are shown (header button, ⇧⌘D).
+    var showChanges = false
+    /// The active file is inside a git working tree, so the button is offered.
+    var changesAvailable = false
+    /// Changes in the active document while they're shown (nil: not known yet).
+    var changeCount: Int?
     /// Focus mode (⇧⌘↩): sidebar, toolbar and tabs hidden.
     var focusMode = false
     /// Mirrors the split view, so the header can make room for the traffic lights.

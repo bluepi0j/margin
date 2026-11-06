@@ -7,7 +7,17 @@
 so Margin can carry small local patches; everything Margin added is marked
 `[Margin patch]`:
 
-- `Services/MarkdownEditorServices.swift` — a `CodeBlockRenderer` service.
+- `Services/MarkdownEditorServices.swift` — a `CodeBlockRenderer` service, and
+  a `decorator` (see below).
+- `Styling/MarkdownDecorator.swift` (new) — `MarkdownDecorator`: the host lays
+  its own attributes over paragraphs after the engine styles them (called from
+  `TextStylingService.restyle` and the document rebuild in
+  `NativeTextViewCoordinator+Restyling.swift`); `MarkdownFragmentDrawing`, drawn
+  by `Renderer/MarkdownTextLayoutFragment.swift` over block backgrounds and
+  under the text for the paragraph whose first character carries
+  `.fragmentDrawing`; and `NSTextView.restyleMarkdownParagraphs(_:)` to restyle
+  some paragraphs (and re-measure the height) when the host's marks change.
+  Margin shows the changes since the last git commit with these.
 - `Styling/MarkdownStyler+RenderedCodeBlocks.swift` — draws fenced code blocks
   the renderer accepts (```mermaid) as images, reusing block LaTeX's
   collapse-the-source machinery; called from `MarkdownStyler.styleAttributes`.

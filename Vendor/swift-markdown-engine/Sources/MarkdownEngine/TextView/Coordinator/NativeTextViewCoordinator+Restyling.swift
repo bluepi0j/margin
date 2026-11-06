@@ -158,6 +158,10 @@ extension NativeTextViewCoordinator {
             for (range, attrs) in runs {
                 built.setAttributes(attrs, range: range)
             }
+            // [Margin patch] Host marks (see MarkdownDecorator).
+            if let decorator = configuration.services.decorator {
+                MainActor.assumeIsolated { decorator.decorate(built, paragraphs: [fullRange]) }
+            }
         }
 
         // ONE live-storage mutation carries the whole styled document across. This is the

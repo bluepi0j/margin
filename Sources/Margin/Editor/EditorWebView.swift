@@ -16,6 +16,9 @@ enum EditorEvent {
     case outline([OutlineItem], words: Int)
     /// The user asked to insert an image from a file (slash menu).
     case pickImage
+    /// How many changes since the last commit the shown document has, or nil
+    /// when it isn't showing changes.
+    case changes(id: String, count: Int?)
 }
 
 struct OutlineItem: Identifiable, Equatable {
@@ -192,6 +195,10 @@ final class EditorWebView: WKWebView {
             if let text = msg["text"] as? String { onEvent?(.copy(text)) }
         case "pickImage":
             onEvent?(.pickImage)
+        case "changes":
+            if let id = msg["id"] as? String, let count = msg["count"] as? Int {
+                onEvent?(.changes(id: id, count: count < 0 ? nil : count))
+            }
         case "outline":
             let raw = msg["items"] as? [[String: Any]] ?? []
             let items = raw.enumerated().map { i, item in

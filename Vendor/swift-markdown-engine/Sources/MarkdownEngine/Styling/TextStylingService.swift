@@ -152,6 +152,10 @@ struct TextStylingService {
             ],
             to: textView.textStorage
         )
+        // [Margin patch] Host marks go back on after styling reset the paragraphs.
+        if let storage = textView.textStorage, let decorator = configuration.services.decorator {
+            MainActor.assumeIsolated { decorator.decorate(storage, paragraphs: paragraphs) }
+        }
         textView.textStorage?.endEditing()
         let attrMs = Double(DispatchTime.now().uptimeNanoseconds - attrT0) / 1_000_000
         // Ordinary edits only invalidate the fragments around the changed

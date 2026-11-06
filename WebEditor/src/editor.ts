@@ -21,6 +21,7 @@ import { FrontMatter, HtmlBlock, HtmlInline, FootnoteRef, FootnoteDef, MarginInl
 import { boundBlockStarts, installMinimalEscaping } from './markdown'
 import { openPopover } from './popover'
 import { Find } from './find'
+import { GitDiff } from './diff'
 import { SlashCommands } from './slash'
 
 const lowlight = createLowlight(common)
@@ -572,6 +573,7 @@ export function createEditor(element: HTMLElement): Editor {
       FootnoteRef,
       FootnoteDef,
       Find,
+      GitDiff,
       MarginKeys,
       PlainCode,
       MarkdownLinks,

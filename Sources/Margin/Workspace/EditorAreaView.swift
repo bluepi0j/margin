@@ -18,6 +18,7 @@ struct StartActions {
 struct ChromeActions {
     var toggleSidebar: () -> Void
     var toggleSource: () -> Void
+    var toggleChanges: () -> Void
     var run: (_ command: String, _ args: [String: Any]) -> Void
     var pickImage: () -> Void
 }
@@ -90,6 +91,18 @@ struct EditorAreaView: View {
                         .foregroundStyle(.tertiary)
                         .fixedSize()
                         .help("Words in this document")
+                }
+                if workspace.changesAvailable {
+                    if workspace.showChanges, !workspace.sourceMode, let count = workspace.changeCount {
+                        Text(count == 0 ? "No changes" : "\(count) \(count == 1 ? "change" : "changes")")
+                            .font(.system(size: 11.5))
+                            .monospacedDigit()
+                            .foregroundStyle(.tertiary)
+                            .fixedSize()
+                            .help("Changes since the last commit")
+                    }
+                    ChromeButton(symbol: "plusminus", help: workspace.showChanges ? "Hide Changes  ⇧⌘D" : "Show Changes Since Last Commit  ⇧⌘D",
+                                 active: workspace.showChanges, action: chromeActions.toggleChanges)
                 }
                 ChromeButton(symbol: "number", help: workspace.sourceMode ? "Show Formatted  ⇧⌘M" : "Show Markdown Source  ⇧⌘M",
                              active: workspace.sourceMode, action: chromeActions.toggleSource)

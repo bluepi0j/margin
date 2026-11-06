@@ -33,6 +33,9 @@ protocol DocumentEditor: AnyObject {
     func goToHeading(_ index: Int)
     /// Shows the first occurrence of `text` (project search results).
     func reveal(_ text: String)
+    /// Shows what changed since `base` (the committed text) in document `id`,
+    /// or stops showing changes with nil. Answers with `.changes` events.
+    func setDiffBase(id: String, base: String?)
 }
 
 /// The TipTap editor page (WebEditor/) in a WKWebView.
@@ -79,6 +82,7 @@ final class WebDocumentEditor: DocumentEditor {
     func focus() { webView.call("focus") }
     func goToHeading(_ index: Int) { webView.call("goToHeading", ["index": index]) }
     func reveal(_ text: String) { webView.call("reveal", ["query": text]) }
+    func setDiffBase(id: String, base: String?) { webView.call("setDiffBase", ["id": id, "markdown": base.map { $0 as Any } ?? NSNull()]) }
 
     /// Keeps the right-click table items in sync with the caret.
     func selectionChanged(_ state: EditorSelection) { webView.caretInTable = state.has("table") }

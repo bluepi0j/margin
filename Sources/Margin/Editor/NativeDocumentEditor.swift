@@ -46,6 +46,14 @@ final class NativeDocumentEditor: DocumentEditor {
     /// The code blocks of the text view's current text, rebuilt on the first
     /// caret move after its characters change rather than scanned per move.
     private var fencedBlocks: (text: String, blocks: [MarkdownEditing.FencedBlock])?
+    /// Changes since the last commit (see NativeDiffDecorator).
+    let diff = NativeDiffDecorator()
+    private var diffBases: [String: String] = [:]
+    private var diffTimer: Timer?
+    private var diffButtons: [NSButton] = []
+    private var frameObserver: NSObjectProtocol?
+    private var storageObserver: NSObjectProtocol?
+    private var diffColumnWidth: CGFloat = 0
 
     init() {
         applySettings()
@@ -82,7 +90,10 @@ final class NativeDocumentEditor: DocumentEditor {
         findQueryWorkItem?.cancel()
         if let selectionObserver { NotificationCenter.default.removeObserver(selectionObserver) }
         if let scrollObserver { NotificationCenter.default.removeObserver(scrollObserver) }
+        if let frameObserver { NotificationCenter.default.removeObserver(frameObserver) }
+        if let storageObserver { NotificationCenter.default.removeObserver(storageObserver) }
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
+        diffTimer?.invalidate()
     }
 
     var view: AnyView {
@@ -106,16 +117,25 @@ final class NativeDocumentEditor: DocumentEditor {
         lastPostedFindRanges = []
         findNeedsRefreshAfterDocumentChange = true
         images.base = urls[id]?.deletingLastPathComponent()
+        // Before the text: the engine decorates the new document as it styles it.
+        diffTimer?.invalidate()
+        diff.setBase(diffBases[id], current: text)
+        diff.clearPending()
         model.documentId = id
         model.text = text
         scheduleInfo()
+        postChanges()
+        DispatchQueue.main.async { [weak self] in self?.updateDiffButtons() }
     }
 
     func close(id: String) {
         if pending.contains(id) { postContent(id) }
         texts[id] = nil
         urls[id] = nil
+        diffBases[id] = nil
         if model.documentId == id {
+            diff.setBase(nil, current: "")
+            updateDiffButtons()
             model.documentId = nil
             model.text = ""
             scheduleInfo()
@@ -130,8 +150,17 @@ final class NativeDocumentEditor: DocumentEditor {
         let old = tv?.string ?? model.text
         let caret = tv.map { MarkdownEditing.mapLocation($0.selectedRange().location, from: old, to: markdown) }
         let origin = tv?.enclosingScrollView?.contentView.bounds.origin
+        let showingChanges = diff.isActive
+        if showingChanges { diff.addPending(diff.refresh(markdown)) }
         model.text = markdown
         findNeedsRefreshAfterDocumentChange = true
+        if showingChanges {
+            DispatchQueue.main.async { [weak self] in
+                self?.restyleVisibleDiff()
+                self?.postChanges()
+                self?.updateDiffButtons()
+            }
+        }
         // Put the caret (moved along with the edit) and the scroll position back
         // once the engine has re-laid out.
         DispatchQueue.main.async {
@@ -162,6 +191,8 @@ final class NativeDocumentEditor: DocumentEditor {
         }
         scheduleInfo()
         findNeedsRefreshAfterDocumentChange = true
+        // The marks already followed the edit (storage notification).
+        if diff.isActive { scheduleDiff() }
     }
 
     private func postContent(_ id: String) {
@@ -222,8 +253,23 @@ final class NativeDocumentEditor: DocumentEditor {
                 if let scrollObserver { NotificationCenter.default.removeObserver(scrollObserver) }
                 scrollObserver = NotificationCenter.default.addObserver(
                     forName: NSView.boundsDidChangeNotification, object: clip, queue: .main
-                ) { [weak self] _ in MainActor.assumeIsolated { self?.trackRail(); self?.updateBlockChip() } }
+                ) { [weak self] _ in MainActor.assumeIsolated { self?.trackRail(); self?.updateBlockChip(); self?.scrolledWithDiff() } }
             }
+            diff.textView = found
+            if let storageObserver { NotificationCenter.default.removeObserver(storageObserver) }
+            storageObserver = NotificationCenter.default.addObserver(
+                forName: NSTextStorage.didProcessEditingNotification, object: found.textStorage, queue: nil
+            ) { [weak self] note in
+                guard let storage = note.object as? NSTextStorage, storage.editedMask.contains(.editedCharacters) else { return }
+                let range = storage.editedRange, delta = storage.changeInLength, length = storage.length
+                MainActor.assumeIsolated { self?.diff.storageEdited(range, delta: delta, newLength: length) }
+            }
+            found.postsFrameChangedNotifications = true
+            if let frameObserver { NotificationCenter.default.removeObserver(frameObserver) }
+        if let storageObserver { NotificationCenter.default.removeObserver(storageObserver) }
+            frameObserver = NotificationCenter.default.addObserver(
+                forName: NSView.frameDidChangeNotification, object: found, queue: .main
+            ) { [weak self] _ in MainActor.assumeIsolated { self?.textViewResized() } }
         }
         return found
     }
@@ -692,6 +738,10 @@ final class NativeDocumentEditor: DocumentEditor {
 
     func setSourceMode(_ on: Bool) {
         model.rawSource = on
+        DispatchQueue.main.async { [weak self] in
+            self?.postChanges()
+            self?.updateDiffButtons()
+        }
         findNeedsRefreshAfterDocumentChange = true
         scheduleInfo()
         scheduleFindBarLayoutUpdate()
@@ -729,6 +779,8 @@ final class NativeDocumentEditor: DocumentEditor {
         model.readingWidth = prefs.contentWidth
         model.fontName = prefs.fontStyle.fontName
         model.showsRail = prefs.showOutlineRail
+        diff.fontName = model.fontName
+        diff.fontSize = model.fontSize
         scheduleFindBarLayoutUpdate()
         // The highlighter only hears about the system's appearance; tell it
         // when Margin's own setting flips light/dark so code is re-colored.
@@ -763,6 +815,144 @@ final class NativeDocumentEditor: DocumentEditor {
         tv.setSelectedRange(range)
         tv.scrollRangeToVisible(range)
         tv.showFindIndicator(for: range)
+    }
+
+    // MARK: Changes since the last commit
+
+    func setDiffBase(id: String, base: String?) {
+        diffBases[id] = base
+        guard model.documentId == id else { return }
+        diffTimer?.invalidate()
+        let current = textView?.string ?? model.text
+        diff.addPending(diff.setBase(base, current: current))
+        restyleVisibleDiff()
+        postChanges()
+        updateDiffButtons()
+    }
+
+    /// Restyles the changed marks on and near the screen; the rest wait
+    /// until scrolling brings them close.
+    private func restyleVisibleDiff() {
+        guard let tv = textView, let tlm = tv.textLayoutManager, let tcm = tlm.textContentManager else { return }
+        let length = (tv.string as NSString).length
+        var window = NSRange(location: 0, length: length)
+        if let viewport = tlm.textViewportLayoutController.viewportRange {
+            let start = tcm.offset(from: tcm.documentRange.location, to: viewport.location)
+            let end = tcm.offset(from: tcm.documentRange.location, to: viewport.endLocation)
+            // A screenful of text either way, so scrolling finds it ready.
+            let margin = max(2000, end - start)
+            window = NSRange(location: max(0, start - margin), length: min(length, end + margin) - max(0, start - margin))
+        }
+        let ranges = diff.takePending(in: window)
+        if !ranges.isEmpty { tv.restyleMarkdownParagraphs(ranges) }
+    }
+
+    private func scheduleDiff() {
+        diffTimer?.invalidate()
+        diffTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.recomputeDiff() }
+        }
+    }
+
+    private func recomputeDiff() {
+        guard diff.isActive, let tv = textView else { return }
+        diff.addPending(diff.refresh(tv.string))
+        restyleVisibleDiff()
+        postChanges()
+        updateDiffButtons()
+    }
+
+    private func scrolledWithDiff() {
+        guard diff.isActive else { return }
+        restyleVisibleDiff()
+        updateDiffButtons()
+    }
+
+    private func postChanges() {
+        guard let id = model.documentId else { return }
+        onEvent?(.changes(id: id, count: diff.isActive && !model.rawSource ? diff.hunks.count : nil))
+    }
+
+    /// The removed text wraps to the column: when it gets wider or narrower,
+    /// the space opened for it has to follow.
+    private func textViewResized() {
+        guard let width = textView?.textContainer?.size.width else { return }
+        if abs(width - diffColumnWidth) > 0.5 {
+            diffColumnWidth = width
+            if diff.isActive {
+                diff.addPending(diff.hunkAnchors.map { NSRange(location: $0, length: 0) })
+                restyleVisibleDiff()
+            }
+        }
+        updateDiffButtons()
+    }
+
+    /// One "restore" button beside each change on screen. They live in the
+    /// scroll view, over the text: there they can sit in the margin right of
+    /// the column, and clicks and accessibility reach them (the text view
+    /// answers for everything inside it).
+    private func updateDiffButtons() {
+        guard let tv = textView, let scrollView = tv.enclosingScrollView, diff.isActive, !model.rawSource,
+              !diff.hunks.isEmpty, let container = tv.textContainer else {
+            diffButtons.forEach { $0.isHidden = true }
+            return
+        }
+        let visible = tv.visibleRect
+        var used = 0
+        for index in diff.hunks.indices {
+            let anchor = diff.anchor(of: index)
+            guard anchor <= (tv.string as NSString).length,
+                  let y = laidOutYOffset(of: min(anchor, max(0, (tv.string as NSString).length - 1)), in: tv),
+                  y + 2 >= visible.minY, y + 24 <= visible.maxY else { continue }
+            let button: NSButton
+            if used < diffButtons.count {
+                button = diffButtons[used]
+            } else {
+                button = NSButton(title: "", target: self, action: #selector(restoreFromButton(_:)))
+                button.bezelStyle = .circular
+                button.isBordered = true
+                button.controlSize = .small
+                button.image = NSImage(systemSymbolName: "arrow.uturn.backward", accessibilityDescription: "Restore")
+                button.imagePosition = .imageOnly
+                button.alphaValue = 0.6
+                scrollView.addSubview(button, positioned: .above, relativeTo: scrollView.contentView)
+                diffButtons.append(button)
+            }
+            used += 1
+            let hunk = diff.hunks[index]
+            button.toolTip = !hunk.addedBlocks.isEmpty && !hunk.removedText.isEmpty ? "Restore the committed version"
+                : hunk.removedText.isEmpty ? "Remove the added text" : "Restore the removed text"
+            button.setAccessibilityLabel(button.toolTip)
+            button.tag = index
+            let x = tv.textContainerOrigin.x + container.size.width + 14
+            var frame = scrollView.convert(CGRect(x: x, y: y + 2, width: 22, height: 22), from: tv)
+            frame.origin.x = min(frame.origin.x, scrollView.bounds.width - 40)
+            button.frame = frame
+            button.isHidden = false
+        }
+        for button in diffButtons[used...] { button.isHidden = true }
+    }
+
+    @objc private func restoreFromButton(_ sender: NSButton) {
+        guard let tv = textView, let base = diff.base, diff.hunks.indices.contains(sender.tag) else { return }
+        // A pending recompute may have moved things: use the latest diff.
+        diffTimer?.invalidate()
+        diff.addPending(diff.refresh(tv.string))
+        restyleVisibleDiff()
+        guard diff.hunks.indices.contains(sender.tag) else { return updateDiffButtons() }
+        let edit = MarkdownDiff.restore(diff.hunks[sender.tag], base: base, current: tv.string)
+        let clip = tv.enclosingScrollView?.contentView
+        let origin = clip?.bounds.origin
+        tv.window?.makeFirstResponder(tv)
+        // Same path as typing: the engine restyles it and records undo.
+        tv.insertText(edit.text, replacementRange: edit.range)
+        tv.undoManager?.setActionName("Restore Change")
+        recomputeDiff()
+        // Inserting scrolls to the caret; the change was on screen, stay put.
+        if let clip, let origin {
+            clip.scroll(to: origin)
+            tv.enclosingScrollView?.reflectScrolledClipView(clip)
+        }
     }
 
     // MARK: Outline and word count
@@ -995,7 +1185,7 @@ private struct NativeEditorView: View {
     private var configuration: MarkdownEditorConfiguration {
         var c = MarkdownEditorConfiguration(
             services: MarkdownEditorServices(images: editor.images, syntaxHighlighter: Self.highlighter, latex: Self.latex,
-                                             codeBlockRenderer: Self.mermaid, bus: editor.findBus),
+                                             codeBlockRenderer: Self.mermaid, decorator: editor.diff, bus: editor.findBus),
             safeAreaInsets: SafeAreaInsets(top: 28, bottom: 40),
             readingWidth: model.readingWidth,
             rawSourceMode: model.rawSource,

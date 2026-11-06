@@ -96,6 +96,11 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
         for fill in blockBackgroundFills(at: .zero) {
             bounds = bounds.union(fill.rect)
         }
+        // [Margin patch] Host drawings (MarkdownFragmentDrawing).
+        if let drawing = hostDrawing {
+            let geometry = hostGeometry(at: .zero)
+            bounds = bounds.union(MainActor.assumeIsolated { drawing.surface(in: geometry) })
+        }
         return bounds
     }
 
@@ -113,6 +118,9 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
 
         // 1b. Line-box fills (`==highlight==` and friends), behind text
         drawBlockBackgrounds(at: point, in: context)
+
+        // 1c. [Margin patch] Host drawings: over block backgrounds, under text.
+        drawHostDrawing(at: point, in: context)
 
         // 2. LaTeX images (behind text — hidden markers are invisible anyway)
         drawLatexImages(at: point, in: context)
@@ -133,6 +141,37 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
 
         // 6. Blockquote bars (left gutter, behind nothing — text is indented)
         drawBlockquoteBars(at: point, in: context)
+    }
+
+    // MARK: - Host drawing [Margin patch]
+
+    private var hostDrawing: MarkdownFragmentDrawing? {
+        guard let ts = textStorage, let range = fragmentNSRange, range.length > 0,
+              range.location < ts.length else { return nil }
+        return ts.attribute(.fragmentDrawing, at: range.location, effectiveRange: nil) as? MarkdownFragmentDrawing
+    }
+
+    private func hostGeometry(at point: CGPoint) -> MarkdownFragmentGeometry {
+        let frame = CGRect(origin: point, size: layoutFragmentFrame.size)
+        let lines = textLineFragments
+        let container = textLayoutManager?.textContainer
+        return MarkdownFragmentGeometry(
+            frame: frame,
+            textTop: point.y + (lines.first?.typographicBounds.minY ?? 0),
+            textBottom: point.y + (lines.last?.typographicBounds.maxY ?? frame.height),
+            columnLeft: point.x - layoutFragmentFrame.origin.x,
+            columnWidth: container?.size.width ?? frame.width,
+            padding: container?.lineFragmentPadding ?? 0
+        )
+    }
+
+    private func drawHostDrawing(at point: CGPoint, in context: CGContext) {
+        guard let drawing = hostDrawing else { return }
+        let geometry = hostGeometry(at: point)
+        NSGraphicsContext.saveGraphicsState()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
+        MainActor.assumeIsolated { drawing.draw(in: geometry) }
     }
 
     // MARK: - Helpers
