@@ -203,3 +203,34 @@ final class CodeFenceTests: XCTestCase {
                        "Intro\r\n\r\n```swift\r\nprint(1)\r\n```\r\n")
     }
 }
+
+final class FencedBlockTests: XCTestCase {
+    /// The precomputed blocks answer exactly like the scan, caret by caret.
+    func testFencedBlocksMatchTheScan() {
+        let samples = [
+            "a\n```js\ncode\n```\nb\n",
+            "~~~\nx\n```\nstill\n~~~\nafter",
+            "````\n```\nnested\n````\n",
+            "```\nnever closed\n",
+            "  ```py\r\nx = 1\r\n  ```\r\ntext\r\n",
+            "``` \n```js lang\nmore\n```\n```\n",
+            "    ```\nindented four is not a fence\n",
+            "",
+            "plain\ntext\n",
+        ]
+        for text in samples {
+            let blocks = MarkdownEditing.fencedBlocks(in: text)
+            for caret in 0...(text as NSString).length {
+                XCTAssertEqual(MarkdownEditing.codeFence(containing: caret, in: blocks),
+                               MarkdownEditing.codeFence(containing: caret, in: text), "\(text.debugDescription) @\(caret)")
+            }
+        }
+    }
+
+    /// The UTF-16 heading scan reads the same headings as before.
+    func testHeadingsInFencesAndIndents() {
+        let text = "# One\n```\n# not\n```\n   ## Two **b**\n    # code\n~~~~\n# no\n~~~\n# no\n~~~~\n### Three\r\n#nospace\n"
+        XCTAssertEqual(MarkdownEditing.headings(text).map(\.text), ["One", "Two b", "Three"])
+        XCTAssertEqual(MarkdownEditing.headings(text).map(\.location), [0, 20, (text as NSString).range(of: "### Three").location])
+    }
+}

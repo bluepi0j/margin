@@ -230,6 +230,61 @@ export function escapeLineStart(text: string): string {
   return ws + head + text.slice(whole.length)
 }
 
+/**
+ * Marked asks each block extension where it starts in the rest of the
+ * document, once for every paragraph, to cut the paragraph short there. The
+ * table, block math and footnote extensions answer by searching (or splitting)
+ * the whole remainder, which makes opening a long note quadratic: about 5 s
+ * for 1 MB. A paragraph ends at the next blank line, so a start beyond it
+ * can't cut anything: search only up to there. Parses stay the same.
+ */
+export function boundBlockStarts(editor: Editor) {
+  const extensions = (editor.markdown as any)?.markedInstance?.defaults?.extensions
+  const starts: Function[] | undefined = extensions?.startBlock
+  if (!Array.isArray(starts) || (starts as any).bounded) return
+  const bounded = starts.map(start => function (this: unknown, src: string) {
+    const blank = src.search(/\n[ \t]*\n/)
+    return start.call(this, blank < 0 ? src : src.slice(0, blank + 1))
+  })
+  ;(bounded as any).bounded = true
+  ;(bounded as any).original = starts
+  extensions.startBlock = bounded
+
+  // The task list tokenizer is tried at every block and splits the whole
+  // remainder into lines before checking whether a task item is even there.
+  // Its start function answers that (0, or -1): ask it first. And a task list
+  // ends at the first unindented line that isn't a task item, so give the
+  // tokenizer only the text up to there. It reads nothing past that line.
+  const blocks: Function[] | undefined = extensions.block
+  const task = starts.findIndex(start => start('- [ ] x') === 0 && start('- x') === -1)
+  if (!Array.isArray(blocks) || task < 0 || blocks.length !== starts.length) return
+  const tokenizer = blocks[task]
+  const start = starts[task]
+  blocks[task] = function (this: unknown, src: string, tokens: unknown) {
+    if (start.call(this, src) !== 0) return undefined
+    return tokenizer.call(this, taskListSpan(src), tokens)
+  }
+  ;(blocks as any).original = { index: task, tokenizer }
+}
+
+/** `src` up to the first unindented, non-blank line after a task item that isn't one. */
+function taskListSpan(src: string): string {
+  const item = /^(\s*)([-+*])\s+\[([ xX])\]\s+(.*)$/
+  let seenItem = false
+  let pos = 0
+  while (pos < src.length) {
+    const newline = src.indexOf('\n', pos)
+    const end = newline < 0 ? src.length : newline
+    const line = src.slice(pos, end)
+    if (line.trim() !== '') {
+      if (item.test(line)) seenItem = true
+      else if (seenItem && !/^\s/.test(line)) return src.slice(0, pos)
+    }
+    pos = end + 1
+  }
+  return src
+}
+
 /** Swap TipTap's text encoder for the minimal one above. */
 export function installMinimalEscaping(editor: Editor) {
   const manager = editor.markdown as any

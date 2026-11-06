@@ -17,7 +17,7 @@ import type { Node as PMNode } from '@tiptap/pm/model'
 import { Plugin } from '@tiptap/pm/state'
 
 import { FrontMatter, HtmlBlock, HtmlInline, FootnoteRef, FootnoteDef, MarginInlineMath, MarginBlockMath } from './nodes'
-import { installMinimalEscaping } from './markdown'
+import { boundBlockStarts, installMinimalEscaping } from './markdown'
 import { openPopover } from './popover'
 import { Find } from './find'
 import { SlashCommands } from './slash'
@@ -487,6 +487,7 @@ export function createEditor(element: HTMLElement): Editor {
     },
   })
   installMinimalEscaping(editor)
+  boundBlockStarts(editor)
   return editor
 }
 

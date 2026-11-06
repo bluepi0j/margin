@@ -23,6 +23,21 @@ final class ClampedScrollView: NSScrollView {
         disableRubberBand()
     }
 
+    /// [Margin patch] An overlay the embedder adds on top of the text (a find
+    /// bar) wins pointer hits, but the scroll area's accessibility hit test
+    /// asks the text view first, so VoiceOver and other assistive clients
+    /// would land in the text underneath. Ask those overlays first.
+    override func accessibilityHitTest(_ point: NSPoint) -> Any? {
+        if let window {
+            let local = convert(window.convertPoint(fromScreen: point), from: nil)
+            for overlay in subviews.reversed()
+            where overlay !== contentView && !(overlay is NSScroller) && !overlay.isHidden && overlay.frame.contains(local) {
+                if let hit = overlay.accessibilityHitTest(point) { return hit }
+            }
+        }
+        return super.accessibilityHitTest(point)
+    }
+
     /// No rubber band. AppKit applies a scroll on the next display refresh, not
     /// inside `scrollWheel(with:)`, so `clampToInsets()` there only ever corrects
     /// the PREVIOUS event's movement. With the rubber band allowed, every refresh

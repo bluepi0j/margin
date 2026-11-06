@@ -43,6 +43,9 @@ final class NativeDocumentEditor: DocumentEditor {
         let table: MarkdownTable?
     }
     private var blockChipContext: BlockChipContext?
+    /// The code blocks of the text view's current text, rebuilt on the first
+    /// caret move after its characters change rather than scanned per move.
+    private var fencedBlocks: (text: String, blocks: [MarkdownEditing.FencedBlock])?
 
     init() {
         applySettings()
@@ -241,7 +244,7 @@ final class NativeDocumentEditor: DocumentEditor {
         guard let tv = textView, model.documentId != nil else { return }
         let text = tv.string
         let caret = tv.selectedRange().location
-        let state = MarkdownEditing.state(text, caret: caret)
+        let state = MarkdownEditing.state(text, caret: caret, blocks: blocks(of: text))
         let table = state.codeFence == nil
             ? MarkdownTable.at(caret, in: text, codeFenceAlreadyChecked: true)
             : nil
@@ -280,7 +283,7 @@ final class NativeDocumentEditor: DocumentEditor {
             return
         }
         let text = tv.string
-        let fence = MarkdownEditing.codeFence(containing: caret, in: text)
+        let fence = MarkdownEditing.codeFence(containing: caret, in: blocks(of: text))
         let table = fence == nil
             ? MarkdownTable.at(caret, in: text, codeFenceAlreadyChecked: true)
             : nil
@@ -292,6 +295,15 @@ final class NativeDocumentEditor: DocumentEditor {
         )
         blockChipContext = context
         updateBlockChip(context)
+    }
+
+    /// The code blocks of `text`. Comparing with the cached text is cheap when
+    /// it is unchanged (the same storage) and only rescans after an edit.
+    private func blocks(of text: String) -> [MarkdownEditing.FencedBlock] {
+        if let cached = fencedBlocks, cached.text == text { return cached.blocks }
+        let blocks = MarkdownEditing.fencedBlocks(in: text)
+        fencedBlocks = (text, blocks)
+        return blocks
     }
 
     private func updateBlockChip(_ context: BlockChipContext) {
@@ -765,11 +777,12 @@ final class NativeDocumentEditor: DocumentEditor {
     private func postInfo() {
         guard model.documentId != nil else { return onEvent?(.outline([], words: 0)) ?? () }
         let text = model.text
-        let items = MarkdownEditing.headings(text).enumerated().map { OutlineItem(id: $0.offset, level: $0.element.level, text: $0.element.text) }
+        let headings = MarkdownEditing.headings(text)
+        let items = headings.enumerated().map { OutlineItem(id: $0.offset, level: $0.element.level, text: $0.element.text) }
         let words = MarkdownEditing.wordCount(text)
         model.wordCount = words
         onEvent?(.outline(items, words: words))
-        updateRail(text)
+        updateRail(text, headings: headings)
         updateBlockChip()
         if findNeedsRefreshAfterDocumentChange {
             findNeedsRefreshAfterDocumentChange = false
@@ -779,18 +792,15 @@ final class NativeDocumentEditor: DocumentEditor {
 
     // MARK: Outline rail
 
-    private func updateRail(_ text: String) {
+    private func updateRail(_ text: String, headings: [MarkdownEditing.Heading]) {
         let ns = text as NSString
-        let all = MarkdownEditing.headings(text).filter { $0.level <= 3 }
+        let all = headings.filter { $0.level <= 3 }
         let rail = all.enumerated().map { i, h -> RailHeading in
             // The section's text: from the line after the heading to the next one.
             let lineEnd = NSMaxRange(ns.lineRange(for: NSRange(location: h.location, length: 0)))
             let end = i + 1 < all.count ? all[i + 1].location : ns.length
-            let body = lineEnd < end ? ns.substring(with: NSRange(location: lineEnd, length: min(end - lineEnd, 400))) : ""
-            let preview = body
-                .replacingOccurrences(of: #"[#>*_`~=|\[\]-]"#, with: "", options: .regularExpression)
-                .split(whereSeparator: \.isWhitespace).joined(separator: " ")
-            return RailHeading(level: h.level, title: h.text, preview: String(preview.prefix(180)), location: h.location,
+            let preview = lineEnd < end ? Self.railPreview(ns, in: NSRange(location: lineEnd, length: min(end - lineEnd, 400))) : ""
+            return RailHeading(level: h.level, title: h.text, preview: preview, location: h.location,
                                percent: ns.length == 0 ? 0 : h.location * 100 / ns.length)
         }
         if model.railHeadings != rail {
@@ -798,6 +808,33 @@ final class NativeDocumentEditor: DocumentEditor {
             scheduleFindBarLayoutUpdate()
         }
         trackRail()
+    }
+
+    /// A section's opening text for the rail's hover card: Markdown marks
+    /// dropped, whitespace runs collapsed, at most 180 characters. A direct
+    /// UTF-16 pass — this runs for every heading after each edit.
+    nonisolated static func railPreview(_ text: NSString, in range: NSRange) -> String {
+        var out: [unichar] = []
+        out.reserveCapacity(180)
+        var space = false
+        var i = range.location
+        let end = NSMaxRange(range)
+        while i < end, out.count < 180 {
+            let c = text.character(at: i)
+            i += 1
+            switch c {
+            case 0x23, 0x3E, 0x2A, 0x5F, 0x60, 0x7E, 0x3D, 0x7C, 0x5B, 0x5D, 0x2D: continue   // # > * _ ` ~ = | [ ] -
+            case 0x20, 0x09, 0x0A, 0x0D, 0x0B, 0x0C, 0x85, 0xA0, 0x2028, 0x2029, 0x3000:
+                space = !out.isEmpty
+                continue
+            default: break
+            }
+            if space { out.append(0x20); space = false; if out.count == 180 { break } }
+            out.append(c)
+        }
+        // Don't end on half of a surrogate pair.
+        if let last = out.last, UTF16.isLeadSurrogate(last) { out.removeLast() }
+        return String(utf16CodeUnits: out, count: out.count)
     }
 
     /// Which heading the top of the window is under.
@@ -1351,6 +1388,13 @@ private final class NativeFindBarContainer: NSView, NSSearchFieldDelegate {
     func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
         if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
             onClose?()
+            return true
+        }
+        // Tab and ⇧Tab move between Find and Replace while both are showing,
+        // instead of leaving the bar for the document.
+        if showsReplace, commandSelector == #selector(NSResponder.insertTab(_:))
+            || commandSelector == #selector(NSResponder.insertBacktab(_:)) {
+            control === searchField ? focusReplace() : focusSearch()
             return true
         }
         if commandSelector == #selector(NSResponder.insertNewline(_:)) {

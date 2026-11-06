@@ -49,6 +49,35 @@ final class NativeFindReplacementTests: XCTestCase {
         XCTAssertEqual(scroll.contentInsets.top, topInset)
     }
 
+    func testTabMovesBetweenFindAndReplace() async throws {
+        _ = NSApplication.shared
+        let editor = NativeDocumentEditor()
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 600),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let host = NSHostingView(rootView: editor.view)
+        window.contentView = host
+        defer { window.close() }
+        editor.open(id: "tab-test", markdown: "cat and cat", documentURL: nil, activate: true)
+        host.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(250))
+        editor.find("replace")
+        let controls = descendants(host)
+        let find = try XCTUnwrap(controls.compactMap { $0 as? NSSearchField }.first)
+        let replace = try XCTUnwrap(controls.compactMap { $0 as? NSTextField }
+            .first { $0.placeholderString == "Replace" })
+        func editing(_ field: NSTextField) -> Bool {
+            (window.firstResponder as? NSTextView)?.delegate === field
+        }
+        window.makeFirstResponder(find)
+        (window.firstResponder as? NSTextView)?.doCommand(by: #selector(NSResponder.insertTab(_:)))
+        XCTAssertTrue(editing(replace))
+        (window.firstResponder as? NSTextView)?.doCommand(by: #selector(NSResponder.insertTab(_:)))
+        XCTAssertTrue(editing(find))
+        (window.firstResponder as? NSTextView)?.doCommand(by: #selector(NSResponder.insertBacktab(_:)))
+        XCTAssertTrue(editing(replace))
+    }
+
     private func descendants(_ view: NSView) -> [NSView] {
         [view] + view.subviews.flatMap(descendants)
     }
