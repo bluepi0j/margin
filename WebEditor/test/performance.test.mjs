@@ -83,3 +83,44 @@ test('parsing a long note is not quadratic', () => {
   // 4× the text: linear is ~4×, quadratic ~16×.
   assert.ok(large < small * 8, `400 sections ${small.toFixed(0)} ms, 1600 sections ${large.toFixed(0)} ms`)
 })
+
+test('code highlighting is incremental and follows edits', () => {
+  const ed = makeEditor()
+  ed.commands.setContent(core.parseMarkdown(ed, 'Intro\n\n```js\nconst a = 1\n```\n\n- item\n\n  ```python\n  def f(): pass\n  ```\n'))
+  const plugin = ed.state.plugins.find(p => p.key.startsWith('codeHighlighting'))
+  assert.ok(plugin)
+  assert.ok(!ed.state.plugins.some(p => p.key.startsWith('lowlight')))
+  const classesAt = (word) => {
+    const text = []
+    ed.state.doc.descendants((n, pos) => { if (n.isText) text.push([pos, n.text]); })
+    const [pos, t] = text.find(([, t]) => t.includes(word))
+    const at = pos + t.indexOf(word)
+    return plugin.getState(ed.state).find(at, at + word.length).map(d => d.type.attrs.class).join(' ')
+  }
+  assert.match(classesAt('const'), /hljs-keyword/)
+  assert.match(classesAt('def'), /hljs-keyword/)
+  // An edit outside code keeps the same decoration set object.
+  const before = plugin.getState(ed.state)
+  ed.commands.setTextSelection(3)
+  assert.equal(plugin.getState(ed.state), before)
+  // Editing the code re-highlights it.
+  let codeStart = -1
+  ed.state.doc.descendants((n, pos) => { if (codeStart < 0 && n.type.name === 'codeBlock') codeStart = pos + 1 })
+  ed.view.dispatch(ed.state.tr.insertText('return ', codeStart))
+  assert.match(classesAt('return'), /hljs-keyword/)
+  // Same decorations as building them from scratch, after a mix of edits.
+  const all = () => plugin.getState(ed.state).find().map(d => `${d.from}-${d.to}:${d.type.attrs.class}`).sort().join('|')
+  ed.view.dispatch(ed.state.tr.insertText('x', 2))                       // before the code
+  ed.view.dispatch(ed.state.tr.insertText('\nlet b = 2', codeStart + 5)) // inside it
+  ed.view.dispatch(ed.state.tr.delete(codeStart + 1, codeStart + 4))      // part of it
+  let blockPos = -1
+  ed.state.doc.descendants((n, pos) => { if (blockPos < 0 && n.type.name === 'codeBlock') blockPos = pos })
+  const tagged = plugin.getState(ed.state)
+  ed.view.dispatch(ed.state.tr.setNodeAttribute(blockPos, 'language', 'python')) // language only
+  assert.notEqual(plugin.getState(ed.state), tagged)
+  const incremental = all()
+  const fresh = makeEditor()
+  fresh.commands.setContent(ed.getJSON())
+  const freshPlugin = fresh.state.plugins.find(p => p.key.startsWith('codeHighlighting'))
+  assert.equal(incremental, freshPlugin.getState(fresh.state).find().map(d => `${d.from}-${d.to}:${d.type.attrs.class}`).sort().join('|'))
+})

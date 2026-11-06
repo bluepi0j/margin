@@ -14,7 +14,8 @@ import { Markdown } from '@tiptap/markdown'
 import { common, createLowlight } from 'lowlight'
 import katex from 'katex'
 import type { Node as PMNode } from '@tiptap/pm/model'
-import { Plugin } from '@tiptap/pm/state'
+import { Plugin, PluginKey, type Transaction } from '@tiptap/pm/state'
+import { Decoration, DecorationSet } from '@tiptap/pm/view'
 
 import { FrontMatter, HtmlBlock, HtmlInline, FootnoteRef, FootnoteDef, MarginInlineMath, MarginBlockMath } from './nodes'
 import { boundBlockStarts, installMinimalEscaping } from './markdown'
@@ -174,7 +175,102 @@ export const MERMAID_SAMPLE = 'graph LR\n  A[Idea] --> B[Draft]\n  B --> C{Good?
 // ---------------------------------------------------------------------------
 // Code block with a language label and a copy button
 
+// Syntax highlighting for code blocks. TipTap's lowlight plugin walks every
+// node of the old and new document on each transaction (caret moves too) and,
+// whenever a code block is edited, highlights every code block again: on a
+// long note that is most of a keystroke. Here a code block is highlighted once
+// per version of its node (unchanged nodes keep their identity), and a
+// transaction that leaves the document alone keeps the decorations.
+type Highlight = { from: number; to: number; className: string }
+const highlights = new WeakMap<PMNode, Highlight[]>()
+
+function highlightCode(node: PMNode, defaultLanguage: string | null): Highlight[] {
+  const cached = highlights.get(node)
+  if (cached) return cached
+  const language = node.attrs.language || defaultLanguage
+  const text = node.textContent
+  const tree = language && (lowlight.listLanguages().includes(language) || lowlight.registered(language))
+    ? lowlight.highlight(language, text)
+    : lowlight.highlightAuto(text)
+  const out: Highlight[] = []
+  let at = 0
+  const walk = (nodes: any[], classes: string[]) => {
+    for (const n of nodes) {
+      const own = [...classes, ...(n.properties?.className ?? [])]
+      if (n.children) walk(n.children, own)
+      else {
+        const length = (n.value ?? '').length
+        if (own.length) out.push({ from: at, to: at + length, className: own.join(' ') })
+        at += length
+      }
+    }
+  }
+  walk(tree.children ?? [], [])
+  highlights.set(node, out)
+  return out
+}
+
+function codeHighlighting(name: string, defaultLanguage: string | null) {
+  const blockDecorations = (node: PMNode, pos: number) =>
+    highlightCode(node, defaultLanguage).map(h => Decoration.inline(pos + 1 + h.from, pos + 1 + h.to, { class: h.className }))
+  const decorate = (doc: PMNode) => {
+    const decorations: Decoration[] = []
+    doc.descendants((node, pos) => {
+      if (node.type.name === name) {
+        decorations.push(...blockDecorations(node, pos))
+        return false
+      }
+      // A paragraph's text can't hold a code block: don't walk into it.
+      return !node.isTextblock
+    })
+    return DecorationSet.create(doc, decorations)
+  }
+  // Move the existing decorations with the edit and redo only the code blocks
+  // the edit touched, instead of rebuilding the set for the whole document.
+  const update = (tr: Transaction, set: DecorationSet) => {
+    let next = set.map(tr.mapping, tr.doc)
+    const touched = new Map<number, PMNode>()
+    tr.mapping.maps.forEach((map, i) => map.forEach((_from, _to, start, end) => {
+      const rest = tr.mapping.slice(i + 1)
+      const from = rest.map(start, -1)
+      const to = Math.min(rest.map(end, 1), tr.doc.content.size)
+      tr.doc.nodesBetween(from, to, (node, pos) => {
+        if (node.type.name === name) { touched.set(pos, node); return false }
+        return !node.isTextblock
+      })
+    }))
+    // An attribute change (the language) moves no text, so its map is empty.
+    tr.steps.forEach((step: any, i) => {
+      if (typeof step.pos !== 'number') return
+      const pos = tr.mapping.slice(i + 1).map(step.pos)
+      const node = tr.doc.nodeAt(pos)
+      if (node?.type.name === name) touched.set(pos, node)
+    })
+    for (const [pos, node] of touched) {
+      next = next.remove(next.find(pos + 1, pos + 1 + node.content.size))
+      next = next.add(tr.doc, blockDecorations(node, pos))
+    }
+    return next
+  }
+  const plugin: Plugin<DecorationSet> = new Plugin({
+    key: new PluginKey('codeHighlighting'),
+    state: {
+      init: (_, { doc }) => decorate(doc),
+      apply: (tr, set) => (tr.docChanged ? update(tr, set) : set),
+    },
+    props: { decorations: state => plugin.getState(state) },
+  })
+  return plugin
+}
+
 const MarginCodeBlock = CodeBlockLowlight.extend({
+  addProseMirrorPlugins() {
+    const inherited = this.parent?.() ?? []
+    return [
+      ...inherited.filter(p => !(p as any).key?.startsWith('lowlight$')),
+      codeHighlighting(this.name, this.options.defaultLanguage),
+    ]
+  },
   // TipTap's own serializer always writes ```; a line of ``` inside the code
   // would then close the block early when the file is read back. Emit a
   // fence one longer than any backtick run in the content (CommonMark).

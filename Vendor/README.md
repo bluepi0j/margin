@@ -19,6 +19,13 @@ so Margin can carry small local patches; everything Margin added is marked
   scrolling to the current one (after an edit or a caret move); such a repaint
   keeps the first visible line where it is, and revealing a far match scrolls
   again until it is really on screen (layout heights are estimates at first).
+- `TextView/ClampedScrollView.swift` — the accessibility hit test asks overlays
+  the embedder adds (the find bar) before the text view underneath.
+- `TextView/NativeTextView/NativeTextView+FrameAndOverscroll.swift` — ignores
+  NSTextView's own height-only shrink proposals (TextKit's estimate after a
+  viewport layout, far too short on a long note, which made typing at the end
+  cost seconds a keystroke), and an out-of-view caret reveal settles the whole
+  layout instead of only up to the caret.
 - `TextView/NativeTextViewWrapper.swift` — `updateNSView` re-applies a changed
   `readingWidth` (the wrap width was only set in `makeNSView`, so Settings ›
   Line width had no effect until the editor was recreated).

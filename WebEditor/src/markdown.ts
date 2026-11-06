@@ -76,18 +76,29 @@ export function serializeMarkdown(editor: Editor, doc: JSONContent): string {
     prefix = `---\n${text}\n---\n`
     rest = content.filter((_, i) => i !== fm)
   }
-  // Choose delimiters absent from this document, including its raw HTML and code.
-  // Attach them only to the serialization copy, never to the live editor state.
-  const input = JSON.stringify(doc)
-  let rawStart = '\uE000', rawEnd = '\uE001'
-  while (input.includes(rawStart)) rawStart += '\uE000'
-  while (input.includes(rawEnd)) rawEnd += '\uE001'
-  const protect = (node: JSONContent): JSONContent => ({
-    ...node,
-    ...(node.type === 'htmlBlock' ? { attrs: { ...node.attrs, rawStart, rawEnd } } : {}),
-    ...(node.content ? { content: node.content.map(protect) } : {}),
-  })
-  const body = tidy(editor.markdown!.serialize({ ...doc, content: rest.map(protect) }), rawStart, rawEnd)
+  // Raw HTML blocks are marked so tidy() leaves them alone. Choose delimiters
+  // absent from this document, including its raw HTML and code, and attach
+  // them only to the serialization copy, never to the live editor state.
+  // Without HTML blocks there is nothing to mark (and no need to search a
+  // long note's text for the delimiters on every save).
+  const hasHtml = (nodes: JSONContent[] | undefined): boolean =>
+    !!nodes?.some(n => n.type === 'htmlBlock' || hasHtml(n.content))
+  let rawStart = '', rawEnd = ''
+  let blocks = rest
+  if (hasHtml(rest)) {
+    rawStart = '\uE000'
+    rawEnd = '\uE001'
+    const input = JSON.stringify(doc)
+    while (input.includes(rawStart)) rawStart += '\uE000'
+    while (input.includes(rawEnd)) rawEnd += '\uE001'
+    const protect = (node: JSONContent): JSONContent => ({
+      ...node,
+      ...(node.type === 'htmlBlock' ? { attrs: { ...node.attrs, rawStart, rawEnd } } : {}),
+      ...(node.content ? { content: node.content.map(protect) } : {}),
+    })
+    blocks = rest.map(protect)
+  }
+  const body = tidy(editor.markdown!.serialize({ ...doc, content: blocks }), rawStart, rawEnd)
   if (!prefix) return body + '\n'
   return body ? `${prefix}\n${body}\n` : prefix
 }
@@ -112,7 +123,7 @@ function tidy(body: string, rawStart: string, rawEnd: string): string {
     if (raw) {
       verbatim = true
       if (line.includes(rawEnd)) raw = false
-    } else if (line.includes(rawStart)) {
+    } else if (rawStart && line.includes(rawStart)) {
       verbatim = true
       raw = !line.includes(rawEnd)
     } else {
@@ -141,7 +152,8 @@ function tidy(body: string, rawStart: string, rawEnd: string): string {
     }
     out.push(line)
   }
-  return out.join('\n').replace(/^\n+/, '').replace(/\s+$/, '').replaceAll(rawStart, '').replaceAll(rawEnd, '')
+  const text = out.join('\n').replace(/^\n+/, '').replace(/\s+$/, '')
+  return rawStart ? text.replaceAll(rawStart, '').replaceAll(rawEnd, '') : text
 }
 
 // ---------------------------------------------------------------------------

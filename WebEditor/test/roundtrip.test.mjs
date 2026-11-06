@@ -81,3 +81,7 @@ test('documents are always schema-valid (standalone image)', () => {
   assert.doesNotThrow(() => node.check())
   assert.equal(core.serializeMarkdown(editor, json), 'para\n\n![Logo](a.png)\n\n> ![b](b.png)\n')
 })
+
+test('private-use characters in text survive a document without HTML', () => {
+  same('Keep \uE000 and \uE001 as typed.\n\n```\ncode \uE000\n```\n')
+})

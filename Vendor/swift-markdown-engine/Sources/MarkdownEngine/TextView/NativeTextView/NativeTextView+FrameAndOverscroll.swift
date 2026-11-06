@@ -288,6 +288,16 @@ extension NativeTextView {
                 // into one transaction that reads the latest width.
                 scheduleTableWidthChangeUpdate()
             }
+        } else if newSize.height < frame.size.height {
+            // [Margin patch] A height-only resize that isn't ours comes from
+            // NSTextView sizing itself after a viewport layout, from TextKit's
+            // height estimate. Once TextKit has dropped layout outside the
+            // viewport that estimate runs short (tens of thousands of points on
+            // a long note); shrinking to it puts the scroll past the end, the
+            // clamp then forces a full layout, and typing at the end costs
+            // seconds a keystroke and loses the caret. The height is ours to
+            // manage (edits and resizes re-measure it), so ignore a shrink here.
+            return
         } else {
             recalcOverscroll(
                 for: scrollView,
@@ -423,12 +433,12 @@ extension NativeTextView {
                 // before trusting an out-of-view verdict — spurious ones then
                 // dissolve, genuine jumps get the correct target. Free when the
                 // caret is already visible (the common per-keystroke case).
-                if let end = tlm.textContentManager?.location(tlm.documentRange.location, offsetBy: min(range.location + 1, docLength)),
-                   let settleRange = NSTextRange(location: tlm.documentRange.location, end: end) {
-                    // O(doc-start → caret) real layout — the prime suspect
-                    // whenever `+reveal` dominates a frame.
-                    PerfTrace.accumulate("revealSettle") { tlm.ensureLayout(for: settleRange) }
-                }
+                // [Margin patch] Settle the whole document, not just up to the
+                // caret: a partial settle leaves the fragments below on
+                // estimates, the next keystroke's reveal disagrees again and
+                // typing pays a settle every other key. Once the whole layout
+                // is real, later reveals are free.
+                PerfTrace.accumulate("revealSettle") { tlm.ensureLayout(for: tlm.documentRange) }
                 revealRect = caretSegmentRect(fallback: revealRect)
                 frame = rectInClipView(revealRect)
             }
