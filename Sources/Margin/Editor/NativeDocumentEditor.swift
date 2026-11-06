@@ -935,12 +935,20 @@ final class NativeDocumentEditor: DocumentEditor {
 
     @objc private func restoreFromButton(_ sender: NSButton) {
         guard let tv = textView, let base = diff.base, diff.hunks.indices.contains(sender.tag) else { return }
-        // A pending recompute may have moved things: use the latest diff.
+        // Edits since the last recompute may have renumbered the changes:
+        // diff again and find this one by what it removed and where it was.
+        let clicked = diff.hunks[sender.tag]
+        let clickedAnchor = diff.anchor(of: sender.tag)
         diffTimer?.invalidate()
         diff.addPending(diff.refresh(tv.string))
         restyleVisibleDiff()
-        guard diff.hunks.indices.contains(sender.tag) else { return updateDiffButtons() }
-        let edit = MarkdownDiff.restore(diff.hunks[sender.tag], base: base, current: tv.string)
+        let candidates = diff.hunks.indices.filter {
+            diff.hunks[$0].removedText == clicked.removedText && diff.hunks[$0].addedBlocks.count == clicked.addedBlocks.count
+        }
+        guard let index = candidates.min(by: { abs(diff.anchor(of: $0) - clickedAnchor) < abs(diff.anchor(of: $1) - clickedAnchor) }) else {
+            return updateDiffButtons()
+        }
+        let edit = MarkdownDiff.restore(diff.hunks[index], base: base, current: tv.string)
         let clip = tv.enclosingScrollView?.contentView
         let origin = clip?.bounds.origin
         tv.window?.makeFirstResponder(tv)

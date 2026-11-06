@@ -221,17 +221,38 @@ public enum MarkdownDiff {
         let old = base as NSString, new = current as NSString
         var text = old.substring(with: hunk.old)
         if !text.isEmpty {
-            // Old segments can lack the blank line the new neighbours need
-            // (the old file's last block, say): keep blocks apart.
+            // Keep the separation the committed text had: a blank line between
+            // paragraphs, none between list items. The old segments carry the
+            // newlines after them; what they lack is what was before them, and
+            // after the old file's last block, which had nothing after it.
+            let oldBefore = trailingNewlines(old.substring(to: hunk.old.location))
             let before = new.substring(to: hunk.new.location)
-            if !before.isEmpty, !before.hasSuffix("\n\n") {
-                text = (before.hasSuffix("\n") ? "\n" : "\n\n") + text
+            if !before.isEmpty {
+                let missing = max(oldBefore, 1) - trailingNewlines(before)
+                if missing > 0 { text = String(repeating: "\n", count: missing) + text }
             }
-            if NSMaxRange(hunk.new) < new.length, !text.hasSuffix("\n\n") {
-                text += text.hasSuffix("\n") ? "\n" : "\n\n"
+            if NSMaxRange(hunk.new) < new.length {
+                let wanted = NSMaxRange(hunk.old) < old.length ? 1 : 2
+                let missing = wanted - trailingNewlines(text)
+                if missing > 0 { text += String(repeating: "\n", count: missing) }
             }
+        } else if NSMaxRange(hunk.new) == new.length, hunk.new.length > 0 {
+            // Removing blocks added at the very end: also drop the blank line
+            // that separated them, back to how the committed text ended.
+            let extra = trailingNewlines(new.substring(to: hunk.new.location)) - trailingNewlines(old.substring(to: hunk.old.location))
+            if extra > 0 { return (NSRange(location: hunk.new.location - extra, length: hunk.new.length + extra), "") }
         }
         return (hunk.new, text)
+    }
+
+    /// Newlines at the end of `s`, up to two (a blank line).
+    private static func trailingNewlines(_ s: String) -> Int {
+        var n = 0
+        for c in s.reversed() {
+            // "\r\n" is one Character in Swift.
+            if c == "\n" || c == "\r\n" { n += 1; if n == 2 { break } } else if c == "\r" { continue } else { break }
+        }
+        return n
     }
 
     // MARK: Internals

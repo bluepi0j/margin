@@ -108,6 +108,29 @@ final class MarkdownDiffTests: XCTestCase {
         }
     }
 
+    /// Restoring puts back the committed text exactly, blank lines included.
+    func testRestoringKeepsTheSeparation() {
+        let cases: [(String, String)] = [
+            ("- one\n- two\n- three\n", "- one\n- two changed\n- three\n"),
+            ("- one\n- two\n- three\n", "- one\n- three\n"),
+            ("- one\n- two\n", "- one\n- two\n- three\n"),
+            ("A\n\nB\n\nC\n", "A\n\nC\n"),
+            ("A\n\nB\n\nC\n", "A\n\nB changed\n\nC\n"),
+            ("# T\n\nA\n\nB\n", "# T\n\nA\n"),
+            ("# T\n\nA\n", "# T\n\nA\n\nAdded\n"),
+            ("A\n- x\n", "A\n- y\n"),
+            ("- one\r\n- two\r\n- three\r\n", "- one\r\n- three\r\n"),
+        ]
+        for (base, current) in cases {
+            var text = current
+            for hunk in MarkdownDiff.compute(base: base, current: text).reversed() {
+                let edit = MarkdownDiff.restore(hunk, base: base, current: text)
+                text = (text as NSString).replacingCharacters(in: edit.range, with: edit.text)
+            }
+            XCTAssertEqual(text, base, "\(base.debugDescription) ← \(current.debugDescription)")
+        }
+    }
+
     /// Restoring one hunk leaves the others alone.
     func testRestoringOneHunk() {
         let base = "A\n\nB\n\nC\n"

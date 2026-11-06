@@ -232,8 +232,13 @@ final class NativeDiffDecorator: MarkdownDecorator {
                 let space = rendered.height + Self.ghostPadding * 2 + Self.ghostGap
                 let style = (storage.attribute(.paragraphStyle, at: line.location, effectiveRange: nil) as? NSParagraphStyle ?? .default)
                     .mutableCopy() as! NSMutableParagraphStyle
-                if ghost.below { style.paragraphSpacing += space } else { style.paragraphSpacingBefore += space }
-                storage.addAttribute(.paragraphStyle, value: style, range: line)
+                // Paragraph ranges can overlap within one pass, and a line the
+                // engine didn't restyle keeps its old style: replace the space
+                // this added before rather than adding to it.
+                let key: NSAttributedString.Key = ghost.below ? .diffSpaceBelow : .diffSpaceAbove
+                let previous = storage.attribute(key, at: line.location, effectiveRange: nil) as? CGFloat ?? 0
+                if ghost.below { style.paragraphSpacing += space - previous } else { style.paragraphSpacingBefore += space - previous }
+                storage.addAttributes([.paragraphStyle: style, key: space], range: line)
             }
         }
     }
@@ -387,6 +392,12 @@ final class NativeDiffDecorator: MarkdownDecorator {
     static let removedBackground = NSColor(name: nil) { _ in
         NSColor.textBackgroundColor.blended(withFraction: 0.09, of: .systemRed) ?? .textBackgroundColor
     }
+}
+
+extension NSAttributedString.Key {
+    /// Space a ghost opened above/below a line (so it's never added twice).
+    static let diffSpaceAbove = NSAttributedString.Key("MarginDiffSpaceAbove")
+    static let diffSpaceBelow = NSAttributedString.Key("MarginDiffSpaceBelow")
 }
 
 /// What one paragraph's fragment draws for the changes: a green tint behind

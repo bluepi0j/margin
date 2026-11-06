@@ -105,9 +105,10 @@ export const GitDiff = Extension.create({
               if (diffKey.getState(view.state)?.base) view.dispatch(view.state.tr.setMeta(diffKey, { recompute: true }).setMeta('margin-external', true).setMeta('addToHistory', false))
             }, RECOMPUTE_DELAY)
           }
-          if (now !== before && (now.hunks !== before?.hunks || now.base !== before?.base)) {
-            onChanges?.(now.base ? now.hunks.length : -1)
-          }
+          // Only when the count changes; showing another tab posts its own.
+          const count = now.base ? now.hunks.length : -1
+          const was = before?.base ? before.hunks.length : -1
+          if (count !== was) onChanges?.(count)
         },
         destroy() { if (timer !== undefined) clearTimeout(timer) },
       }),
