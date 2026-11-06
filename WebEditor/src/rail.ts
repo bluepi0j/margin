@@ -105,6 +105,8 @@ export class OutlineRail {
       if (i < this.headings.length - 1) this.add(i, true, 0)
     })
     this.track()
+    // These are new DOM rows even if the current section has not changed.
+    this.paint()
   }
 
   private setVisible(visible: boolean) {

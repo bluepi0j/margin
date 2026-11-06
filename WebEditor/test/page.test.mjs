@@ -196,3 +196,20 @@ test('Edit on a diagram opens its source and keeps it open', async () => {
   assert.ok(!block.classList.contains('editing'))
   assert.equal(toggle.textContent, 'Edit')
 })
+
+test('outline rail keeps its current-section marker after rebuilding at the same position', () => {
+  margin.open('rail-rebuild', '# First\n\n## Second\n\n## Third\n', '', true)
+  const page = document.getElementById('editor')
+  const original = page.getBoundingClientRect
+  page.getBoundingClientRect = () => ({ left: 100, top: 0, width: 760, height: 900 })
+  try {
+    window.dispatchEvent(new window.Event('resize'))
+    assert.equal(document.querySelector('.rail').hidden, false)
+    assert.equal(document.querySelectorAll('.rail-tick.is-active').length, 1)
+    window.dispatchEvent(new window.Event('resize'))
+    assert.equal(document.querySelectorAll('.rail-tick.is-active').length, 1)
+  } finally {
+    page.getBoundingClientRect = original
+    margin.close('rail-rebuild')
+  }
+})

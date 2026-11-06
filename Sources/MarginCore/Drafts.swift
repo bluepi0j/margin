@@ -41,7 +41,10 @@ public enum Drafts {
         var out = markdown
         var targets: [URL: URL] = [:]
         guard source.resolvingSymlinksInPath().standardizedFileURL != destination.resolvingSymlinksInPath().standardizedFileURL else { return markdown }
+        let code = codeRanges(in: ns)
         for match in images.matches(in: markdown, range: NSRange(location: 0, length: ns.length)).reversed() {
+            guard !isEscaped(match.range.location, in: ns),
+                  !code.contains(where: { NSLocationInRange(match.range.location, $0) }) else { continue }
             let rawLink = ns.substring(with: match.range(at: 1))
             let link = rawLink.hasPrefix("<") && rawLink.hasSuffix(">")
                 ? String(rawLink.dropFirst().dropLast())
@@ -77,6 +80,61 @@ public enum Drafts {
             out = (out as NSString).replacingCharacters(in: match.range(at: 1), with: target.markdownLinkPath(from: destination))
         }
         return out
+    }
+
+    /// Image-looking examples inside code are text, not assets. Keep offsets in
+    /// UTF-16 so they can be compared directly with the image regex matches.
+    private static func codeRanges(in text: NSString) -> [NSRange] {
+        let fencePattern = try! NSRegularExpression(pattern: #"^[ \t]*(?:>[ \t]*)*(?:[-+*][ \t]+|[0-9]+[.)][ \t]+)?(`{3,}|~{3,})(.*)$"#)
+        var ranges: [NSRange] = []
+        var fence: (marker: String, start: Int)?
+        var offset = 0
+        while offset < text.length {
+            var end = 0, contentsEnd = 0
+            text.getLineStart(nil, end: &end, contentsEnd: &contentsEnd,
+                              for: NSRange(location: offset, length: 0))
+            let line = text.substring(with: NSRange(location: offset, length: contentsEnd - offset)) as NSString
+            if let match = fencePattern.firstMatch(in: line as String, range: NSRange(location: 0, length: line.length)) {
+                let marker = line.substring(with: match.range(at: 1))
+                let suffix = line.substring(with: match.range(at: 2))
+                if let open = fence {
+                    if marker.first == open.marker.first, marker.count >= open.marker.count,
+                       suffix.trimmingCharacters(in: .whitespaces).isEmpty {
+                        ranges.append(NSRange(location: open.start, length: end - open.start))
+                        fence = nil
+                    }
+                } else if marker.first != "`" || !suffix.contains("`") {
+                    fence = (marker, offset)
+                }
+            }
+            offset = end
+        }
+        if let fence { ranges.append(NSRange(location: fence.start, length: text.length - fence.start)) }
+
+        // Match equal-length backtick runs, including multiline code spans.
+        // Unmatched runs remain literal text and must not hide later images.
+        let ticks = try! NSRegularExpression(pattern: "`+")
+        let runs = ticks.matches(in: text as String, range: NSRange(location: 0, length: text.length))
+            .map(\.range).filter { run in !ranges.contains { NSLocationInRange(run.location, $0) } }
+        var i = 0
+        while i < runs.count {
+            let open = runs[i]
+            if !isEscaped(open.location, in: text),
+               let close = runs.indices.dropFirst(i + 1).first(where: { candidate in
+                   runs[candidate].length == open.length &&
+                   !ranges.contains { $0.location > open.location && $0.location < runs[candidate].location }
+               }) {
+                ranges.append(NSRange(location: open.location, length: NSMaxRange(runs[close]) - open.location))
+                i = close + 1
+            } else { i += 1 }
+        }
+        return ranges
+    }
+
+    private static func isEscaped(_ offset: Int, in text: NSString) -> Bool {
+        var start = offset
+        while start > 0, text.character(at: start - 1) == 0x5C { start -= 1 }
+        return (offset - start) % 2 == 1
     }
 }
 

@@ -337,13 +337,12 @@ final class NativeDocumentEditor: DocumentEditor {
             readingWidth: CGFloat(model.readingWidth),
             railIsVisible: railIsVisible
         )
+        container.needsLayout = true
+        container.layoutSubtreeIfNeeded()
         guard container.isFindBarVisible else {
             clearFindHighlights()
             return
         }
-
-        container.needsLayout = true
-        container.layoutSubtreeIfNeeded()
     }
 
     fileprivate func scheduleFindBarLayoutUpdate() {
@@ -399,9 +398,11 @@ final class NativeDocumentEditor: DocumentEditor {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: work)
     }
 
-    private func setFindQuery(_ query: String, preferredIndex: Int?, reveal: Bool = true) {
+    private func setFindQuery(_ query: String, preferredIndex: Int?, afterReplacementAt: Int? = nil,
+                              reveal: Bool = true) {
         findQueryWorkItem?.cancel()
         findQueryWorkItem = nil
+        let previousIndex = query == findMatchQuery ? findCurrentIndex : nil
         findMatchQuery = query
         guard let tv = textView, let bar = findBarContainer else { return }
         let text = tv.string as NSString
@@ -420,8 +421,12 @@ final class NativeDocumentEditor: DocumentEditor {
             let rhs = abs(findMatchRanges[$1].location - caret)
             return lhs < rhs
         } ?? 0
-        let requested = preferredIndex ?? findCurrentIndex ?? nearest
-        findCurrentIndex = min(max(requested, 0), findMatchRanges.count - 1)
+        let requested = afterReplacementAt.map { end in
+            findMatchRanges.firstIndex { $0.location >= end } ?? -1
+        } ?? preferredIndex ?? previousIndex ?? nearest
+        // -1 leaves the remaining matches highlighted without selecting a
+        // replacement again. Next/Previous explicitly resumes navigation.
+        findCurrentIndex = min(max(requested, -1), findMatchRanges.count - 1)
         bar.setResultCount(findMatchRanges.count > 0 ? (findCurrentIndex! + 1, findMatchRanges.count) : nil)
         postFindHighlights(reveal: reveal)
     }
@@ -429,7 +434,7 @@ final class NativeDocumentEditor: DocumentEditor {
     private func postFindHighlights(reveal: Bool = true) {
         guard findBarContainer?.isFindBarVisible == true,
               let index = findCurrentIndex,
-              findMatchRanges.indices.contains(index) else {
+              !findMatchRanges.isEmpty else {
             clearFindHighlights()
             return
         }
@@ -485,7 +490,9 @@ final class NativeDocumentEditor: DocumentEditor {
         }
         guard !findMatchRanges.isEmpty else { return }
         let current = findCurrentIndex ?? (delta > 0 ? -1 : 0)
-        findCurrentIndex = (current + delta + findMatchRanges.count) % findMatchRanges.count
+        findCurrentIndex = current < 0
+            ? (delta > 0 ? 0 : findMatchRanges.count - 1)
+            : (current + delta + findMatchRanges.count) % findMatchRanges.count
         bar.setResultCount((findCurrentIndex! + 1, findMatchRanges.count))
         postFindHighlights()
     }
@@ -498,7 +505,7 @@ final class NativeDocumentEditor: DocumentEditor {
         }
         bar.setReplaceVisible(replace || bar.showsReplace)
         bar.isFindBarVisible = true
-        scheduleFindBarLayoutUpdate()
+        updateFindBarLayout()
         setFindQuery(bar.query, preferredIndex: nil)
         bar.focusSearch()
     }
@@ -543,7 +550,8 @@ final class NativeDocumentEditor: DocumentEditor {
         tv.breakUndoCoalescing()
 
         findNeedsRefreshAfterDocumentChange = false
-        setFindQuery(findBarContainer?.query ?? "", preferredIndex: index)
+        setFindQuery(findBarContainer?.query ?? "", preferredIndex: nil,
+                     afterReplacementAt: target.location + (replacement as NSString).length)
         findBarContainer?.focusReplace()
     }
 
@@ -835,10 +843,11 @@ final class NativeDocumentEditor: DocumentEditor {
     /// Y offset for an anchor TextKit has already laid out. This is the
     /// scroll-path variant: it never asks TextKit to settle a missing prefix.
     private func laidOutYOffset(of location: Int, in tv: NSTextView) -> CGFloat? {
-        if let tlm = tv.textLayoutManager, let tcm = tlm.textContentManager,
-           let loc = tcm.location(tcm.documentRange.location, offsetBy: location),
-           let fragment = tlm.textLayoutFragment(for: loc),
-           fragment.state == .layoutAvailable {
+        if let tlm = tv.textLayoutManager {
+            guard let tcm = tlm.textContentManager,
+                  let loc = tcm.location(tcm.documentRange.location, offsetBy: location),
+                  let fragment = tlm.textLayoutFragment(for: loc),
+                  fragment.state == .layoutAvailable else { return nil }
             return fragment.layoutFragmentFrame.minY + tv.textContainerOrigin.y
         }
         guard let lm = tv.layoutManager else { return nil }
@@ -1077,6 +1086,7 @@ private struct HostViewReader: NSViewRepresentable {
 /// owning the controls keeps both concerns in the same coordinate system.
 private final class NativeFindBarContainer: NSView, NSSearchFieldDelegate {
     weak var scrollView: NSScrollView?
+    private let baseTopInset: CGFloat
     private let searchField = NSSearchField()
     private let resultLabel = NSTextField(labelWithString: "")
     private let previousButton = NSButton()
@@ -1124,6 +1134,7 @@ private final class NativeFindBarContainer: NSView, NSSearchFieldDelegate {
 
     init(scrollView: NSScrollView) {
         self.scrollView = scrollView
+        baseTopInset = scrollView.contentInsets.top
         super.init(frame: NSRect(origin: .zero, size: NSSize(width: scrollView.bounds.width, height: 0)))
         autoresizingMask = [.width]
         isHidden = true
@@ -1163,6 +1174,21 @@ private final class NativeFindBarContainer: NSView, NSSearchFieldDelegate {
         super.layout()
         let width = max(0, (scrollView?.bounds.width ?? 0) - leadingInset)
         frame = NSRect(x: leadingInset, y: 0, width: width, height: preferredHeight)
+        if let scrollView {
+            let oldTop = scrollView.contentInsets.top
+            let newTop = baseTopInset + preferredHeight
+            if abs(oldTop - newTop) > 0.5 {
+                let wasAtTop = abs(scrollView.contentView.bounds.minY + oldTop) < 1
+                var insets = scrollView.contentInsets
+                insets.top = newTop
+                scrollView.contentInsets = insets
+                if wasAtTop {
+                    let origin = scrollView.contentView.bounds.origin
+                    scrollView.contentView.scroll(to: NSPoint(x: origin.x, y: -newTop))
+                    scrollView.reflectScrolledClipView(scrollView.contentView)
+                }
+            }
+        }
         guard isFindBarVisible else { return }
 
         let margin: CGFloat = 4
@@ -1195,7 +1221,8 @@ private final class NativeFindBarContainer: NSView, NSSearchFieldDelegate {
 
     func setResultCount(_ count: (current: Int, total: Int)?) {
         if let count {
-            resultLabel.stringValue = "\(count.current) of \(count.total)"
+            resultLabel.stringValue = count.current > 0
+                ? "\(count.current) of \(count.total)" : "\(count.total) matches"
             resultLabel.textColor = .secondaryLabelColor
         } else if !query.isEmpty {
             resultLabel.stringValue = "None"

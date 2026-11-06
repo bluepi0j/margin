@@ -263,6 +263,38 @@ final class DocumentTitleTests: XCTestCase {
         XCTAssertTrue(Drafts.isDraft(Drafts.folder.appendingPathComponent("Draft-1.md")))
         XCTAssertFalse(Drafts.isDraft(URL(fileURLWithPath: "/tmp/x.md")))
     }
+
+    func testImageRelocationPreservesCodeExamplesAndEscapedImages() throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let source = base.appendingPathComponent("source")
+        let destination = base.appendingPathComponent("destination")
+        let fm = FileManager.default
+        defer { try? fm.removeItem(at: base) }
+        for folder in [source, destination] {
+            try fm.createDirectory(at: folder.appendingPathComponent("assets"), withIntermediateDirectories: true)
+            try Data([1]).write(to: folder.appendingPathComponent("assets/shot.png"))
+        }
+        let image = "![example](assets/shot.png)"
+        let examples = [
+            "```markdown\n\(image)\n```",
+            "~~~~\n\(image)\n~~~\n\(image)\n~~~~",
+            "> ```markdown\n> \(image)\n> ```",
+            "- ```markdown\n  \(image)\n  ```",
+            "`\(image)`", "``a ` \(image)``", "`first\n\(image)`",
+            "\\\(image)",
+        ].joined(separator: "\n\n")
+        for copyAll in [false, true] {
+            let out = Drafts.relocateImages(in: "中文 👋\n\n\(examples)\n\n\(image)",
+                                           from: source, to: destination, copyAllLocalImages: copyAll)
+            XCTAssertTrue(out.hasPrefix("中文 👋\n\n\(examples)\n\n"))
+            XCTAssertFalse(out.hasSuffix(image))
+        }
+        // An unfinished fence protects the rest; a lone backtick does not.
+        XCTAssertEqual(Drafts.relocateImages(in: "```\n\(image)", from: source, to: destination), "```\n\(image)")
+        XCTAssertNotEqual(Drafts.relocateImages(in: "a ` \(image)", from: source, to: destination), "a ` \(image)")
+        let markedAlt = "![`example`](assets/shot.png)"
+        XCTAssertNotEqual(Drafts.relocateImages(in: markedAlt, from: source, to: destination), markedAlt)
+    }
 }
 
 final class ProjectSearchTests: XCTestCase {
