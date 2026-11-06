@@ -14,6 +14,9 @@ so Margin can carry small local patches; everything Margin added is marked
 - `TextView/NativeTextView/NativeTextView+PasteHandling.swift` — preserves pasted
   Markdown whitespace (leading indentation, trailing spaces and blank lines)
   instead of globally trimming and normalizing it.
+- `TextView/Coordinator/NativeTextViewCoordinator+Find.swift` — a find
+  highlight post can carry `"reveal": false` to repaint matches without
+  scrolling to the current one (after an edit or a caret move).
 - `TextView/NativeTextViewWrapper.swift` — `updateNSView` re-applies a changed
   `readingWidth` (the wrap width was only set in `makeNSView`, so Settings ›
   Line width had no effect until the editor was recreated).

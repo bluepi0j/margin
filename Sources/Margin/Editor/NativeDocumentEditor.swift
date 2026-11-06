@@ -365,7 +365,9 @@ final class NativeDocumentEditor: DocumentEditor {
         // leaves every match visually unhighlighted.
         lastPostedFindIndex = nil
         lastPostedFindRanges = []
-        setFindQuery(bar.query, preferredIndex: nil)
+        // Repaint only: the edit happened where the caret is, and jumping to
+        // the current match would pull the view away from the text being typed.
+        setFindQuery(bar.query, preferredIndex: nil, reveal: false)
     }
 
     private static func findRanges(in text: NSString, query: String) -> [NSRange] {
@@ -397,7 +399,7 @@ final class NativeDocumentEditor: DocumentEditor {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: work)
     }
 
-    private func setFindQuery(_ query: String, preferredIndex: Int?) {
+    private func setFindQuery(_ query: String, preferredIndex: Int?, reveal: Bool = true) {
         findQueryWorkItem?.cancel()
         findQueryWorkItem = nil
         findMatchQuery = query
@@ -421,10 +423,10 @@ final class NativeDocumentEditor: DocumentEditor {
         let requested = preferredIndex ?? findCurrentIndex ?? nearest
         findCurrentIndex = min(max(requested, 0), findMatchRanges.count - 1)
         bar.setResultCount(findMatchRanges.count > 0 ? (findCurrentIndex! + 1, findMatchRanges.count) : nil)
-        postFindHighlights()
+        postFindHighlights(reveal: reveal)
     }
 
-    private func postFindHighlights() {
+    private func postFindHighlights(reveal: Bool = true) {
         guard findBarContainer?.isFindBarVisible == true,
               let index = findCurrentIndex,
               findMatchRanges.indices.contains(index) else {
@@ -437,7 +439,7 @@ final class NativeDocumentEditor: DocumentEditor {
         NotificationCenter.default.post(
             name: findNotifications.scrollToRange,
             object: nil,
-            userInfo: ["allRanges": findMatchRanges, "currentIndex": index]
+            userInfo: ["allRanges": findMatchRanges, "currentIndex": index, "reveal": reveal]
         )
     }
 
@@ -457,7 +459,8 @@ final class NativeDocumentEditor: DocumentEditor {
         } ?? 0
         findCurrentIndex = currentIndex
         findBarContainer?.setResultCount((currentIndex + 1, findMatchRanges.count))
-        postFindHighlights()
+        // The caret moved on its own (a click, typing): follow it, don't scroll.
+        postFindHighlights(reveal: false)
     }
 
     private func clearFindHighlights() {

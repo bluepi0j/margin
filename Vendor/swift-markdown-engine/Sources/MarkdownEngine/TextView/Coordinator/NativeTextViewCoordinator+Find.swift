@@ -28,7 +28,10 @@ extension NativeTextViewCoordinator {
         guard let info = notification.userInfo,
               let currentIndex = info["currentIndex"] as? Int,
               let allRanges = info["allRanges"] as? [NSRange] else { return }
-        renderFindMatches(allRanges, currentIndex: currentIndex)
+        // [Margin patch] "reveal": false repaints the highlights in place (after
+        // an edit, say) without scrolling to the current match.
+        renderFindMatches(allRanges, currentIndex: currentIndex,
+                          reveal: info["reveal"] as? Bool ?? true)
     }
 
     /// Find against the engine's OWN displayed text (`tv.string`). Matches are computed in
@@ -172,7 +175,7 @@ extension NativeTextViewCoordinator {
     }
 
     /// Highlight all matches (current one stronger) and scroll the current match into view.
-    private func renderFindMatches(_ allRanges: [NSRange], currentIndex: Int) {
+    private func renderFindMatches(_ allRanges: [NSRange], currentIndex: Int, reveal: Bool = true) {
         guard let tv = textView else { return }
         let storage = tv.textStorage
         let fullRange = NSRange(location: 0, length: (tv.string as NSString).length)
@@ -199,7 +202,7 @@ extension NativeTextViewCoordinator {
         }
 
         // Scroll the current match into view.
-        guard allRanges.indices.contains(currentIndex) else { return }
+        guard reveal, allRanges.indices.contains(currentIndex) else { return }
         let range = allRanges[currentIndex]
         guard range.location + range.length <= fullRange.length else { return }
         // Use the editor's TextKit 2 reveal path. Layout fragments can carry
