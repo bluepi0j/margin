@@ -53,11 +53,22 @@ final class NativeDocumentEditor: DocumentEditor {
     private var diffButtons: [NSButton] = []
     private var frameObserver: NSObjectProtocol?
     private var storageObserver: NSObjectProtocol?
+    private var activeObserver: NSObjectProtocol?
     private var diffColumnWidth: CGFloat = 0
 
     init() {
         applySettings()
         DispatchQueue.main.async { [weak self] in self?.onEvent?(.ready) }
+        // Back from another app, which may have rewritten an image the
+        // document shows: draw the new one.
+        activeObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.images.dropChanged() else { return }
+                self.model.imagesVersion += 1
+            }
+        }
         // NSTextView consumes ⌘F/⌘G before the menu bar gets a chance to route
         // them to Margin, which would bring back AppKit's dimmed find overlay.
         // Route those commands to our host-owned bar while this editor's window
@@ -92,6 +103,7 @@ final class NativeDocumentEditor: DocumentEditor {
         if let scrollObserver { NotificationCenter.default.removeObserver(scrollObserver) }
         if let frameObserver { NotificationCenter.default.removeObserver(frameObserver) }
         if let storageObserver { NotificationCenter.default.removeObserver(storageObserver) }
+        if let activeObserver { NotificationCenter.default.removeObserver(activeObserver) }
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
         diffTimer?.invalidate()
     }
@@ -1127,6 +1139,9 @@ final class NativeEditorModel {
     var showsRail = true
     var railHeadings: [RailHeading] = []
     var railCurrent = 0
+    /// Bumped when an image file changed on disk, so the view is updated and
+    /// the engine sees the image provider's new fingerprint.
+    var imagesVersion = 0
     /// The label at the top right of the code block or table at the caret,
     /// in the editor view's coordinates.
     var blockChip: BlockChip?
@@ -1203,6 +1218,7 @@ private struct NativeEditorView: View {
     }
 
     private var configuration: MarkdownEditorConfiguration {
+        _ = model.imagesVersion
         var c = MarkdownEditorConfiguration(
             services: MarkdownEditorServices(images: editor.images, syntaxHighlighter: Self.highlighter, latex: Self.latex,
                                              codeBlockRenderer: Self.mermaid, decorator: editor.diff, bus: editor.findBus),
@@ -1623,7 +1639,10 @@ private final class NativeFindBarContainer: NSView, NSSearchFieldDelegate {
 final class LocalImageProvider: EmbeddedImageProvider, @unchecked Sendable {
     private let lock = NSLock()
     private var _base: URL?
-    private var cache: [String: NSImage] = [:]
+    /// Loaded images, with the file's modification date when it was read: a
+    /// file written again since is read again.
+    private var cache: [String: (image: NSImage, file: URL, modified: Date?)] = [:]
+    private var generation = 0
 
     var base: URL? {
         get { lock.withLock { _base } }
@@ -1633,7 +1652,7 @@ final class LocalImageProvider: EmbeddedImageProvider, @unchecked Sendable {
     func image(for reference: EmbeddedImageRequest) -> NSImage? {
         let name = reference.name.trimmingCharacters(in: .whitespaces)
         let (dir, cached) = lock.withLock { (_base, cache[(_base?.path ?? "") + "|" + name]) }
-        if let cached { return cached }
+        if let cached, cached.modified == Self.modified(cached.file) { return cached.image }
         let url: URL?
         if name.hasPrefix("http://") || name.hasPrefix("https://") {
             url = nil // no network loads on the main thread
@@ -1643,12 +1662,35 @@ final class LocalImageProvider: EmbeddedImageProvider, @unchecked Sendable {
             let path = name.removingPercentEncoding ?? name
             url = path.hasPrefix("/") ? URL(fileURLWithPath: path) : dir?.appendingPathComponent(path)
         }
+        let modified = url.flatMap(Self.modified)
         guard let url, let image = NSImage(contentsOf: url) else { return nil }
-        lock.withLock { cache[(dir?.path ?? "") + "|" + name] = image }
+        lock.withLock {
+            // Images of documents closed long ago don't stay for good.
+            if cache.count >= 200 { cache.removeAll() }
+            cache[(dir?.path ?? "") + "|" + name] = (image, url, modified)
+        }
         return image
     }
 
-    func fingerprint() -> AnyHashable { base?.path ?? "" }
+    /// Forgets the images whose file changed on disk since they were read.
+    /// True when there were any: the fingerprint changes with it, which has
+    /// the engine style the document's images again.
+    func dropChanged() -> Bool {
+        lock.withLock {
+            let stale = cache.filter { $0.value.modified != Self.modified($0.value.file) }.map(\.key)
+            guard !stale.isEmpty else { return false }
+            stale.forEach { cache[$0] = nil }
+            generation += 1
+            return true
+        }
+    }
+
+    /// (From the file system each time: a URL keeps the resource values it has read.)
+    private static func modified(_ file: URL) -> Date? {
+        (try? FileManager.default.attributesOfItem(atPath: file.path))?[.modificationDate] as? Date
+    }
+
+    func fingerprint() -> AnyHashable { lock.withLock { "\(generation)|\(_base?.path ?? "")" } }
 }
 
 private extension CodeHighlightTheme {
