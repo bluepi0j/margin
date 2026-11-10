@@ -1,4 +1,5 @@
 import Foundation
+import UniformTypeIdentifiers
 
 /// Which files the app treats as Markdown, and which folders it never shows.
 public enum MarkdownFiles {
@@ -17,6 +18,12 @@ public enum MarkdownFiles {
     public static func isImage(_ url: URL) -> Bool {
         ["png", "jpg", "jpeg", "gif", "webp", "svg", "heic", "tiff", "bmp", "avif"].contains(url.pathExtension.lowercased())
     }
+
+    /// Kinds of file that run something when opened: programs and scripts,
+    /// installers, disk images, and files that open another address or file.
+    static let runnableTypes: [UTType] = [.executable, .script, .application, .diskImage, .internetLocation, .aliasFile]
+        + ["com.apple.installer-package-archive", "com.apple.automator-workflow", "com.apple.terminal.settings"]
+            .compactMap { UTType($0) }
 }
 
 public extension URL {
@@ -59,6 +66,19 @@ public extension URL {
             return String(path.dropFirst("/private".count))
         }
         return path
+    }
+
+    /// Whether opening this file would run something (see `runnableTypes`).
+    /// A link in a document can point at such a file, and a document from
+    /// somewhere else must not start a program with a click.
+    var runsWhenOpened: Bool {
+        let file = resolvingSymlinksInPath()
+        let values = try? file.resourceValues(forKeys: [.contentTypeKey, .isExecutableKey, .isDirectoryKey, .isApplicationKey])
+        if values?.isApplication == true { return true }
+        // (Every folder has the executable bit.)
+        if values?.isDirectory != true, values?.isExecutable == true { return true }
+        guard let type = values?.contentType else { return false }
+        return MarkdownFiles.runnableTypes.contains { type.conforms(to: $0) }
     }
 
     var isDirectoryOnDisk: Bool {

@@ -846,6 +846,9 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
         }
         if MarkdownFiles.isMarkdown(url) || url.isDirectoryOnDisk {
             AppDelegate.shared.open(url)
+        } else if url.runsWhenOpened {
+            // A script or a program: show where it is rather than start it.
+            NSWorkspace.shared.activateFileViewerSelecting([url])
         } else {
             NSWorkspace.shared.open(url)
         }

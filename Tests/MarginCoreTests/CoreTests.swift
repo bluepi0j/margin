@@ -199,6 +199,25 @@ final class FileTests: XCTestCase {
         XCTAssertThrowsError(try TextFile.read(url))
     }
 
+    func testFilesThatRunWhenOpened() throws {
+        for name in ["setup.command", "build.sh", "tool.py", "Site.webloc", "Installer.pkg", "Disk.dmg"] {
+            try touch(name)
+            XCTAssertTrue(dir.appendingPathComponent(name).runsWhenOpened, name)
+        }
+        // No extension, but marked executable: Finder would run it in Terminal.
+        try touch("run-me")
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.appendingPathComponent("run-me").path)
+        XCTAssertTrue(dir.appendingPathComponent("run-me").runsWhenOpened)
+        // A link to a script is the script.
+        try FileManager.default.createSymbolicLink(at: dir.appendingPathComponent("link.txt"), withDestinationURL: dir.appendingPathComponent("setup.command"))
+        XCTAssertTrue(dir.appendingPathComponent("link.txt").runsWhenOpened)
+        for name in ["photo.png", "paper.pdf", "notes.txt", "data.csv", "folder/inside.md"] {
+            try touch(name)
+            XCTAssertFalse(dir.appendingPathComponent(name).runsWhenOpened, name)
+        }
+        XCTAssertFalse(dir.appendingPathComponent("folder").runsWhenOpened)
+    }
+
     func testAvailableURL() throws {
         try touch("Untitled.md")
         XCTAssertEqual(TextFile.availableURL(in: dir, base: "Untitled", ext: "md").lastPathComponent, "Untitled 2.md")
