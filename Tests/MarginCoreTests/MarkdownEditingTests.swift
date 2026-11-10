@@ -127,6 +127,16 @@ final class MarkdownEditingTests: XCTestCase {
         XCTAssertEqual(apply(both, MarkdownEditing.toggleInline(both, on.selection, marker: "*")), t)
     }
 
+    func testItalicOnASelectionWithItsBoldMarkersKeepsTheBold() {
+        let t = "**a**"
+        let on = MarkdownEditing.toggleInline(t, NSRange(location: 0, length: 5), marker: "*")
+        let both = apply(t, on)
+        XCTAssertEqual(both, "***a***")
+        XCTAssertEqual(apply(both, MarkdownEditing.toggleInline(both, on.selection, marker: "*")), t)
+        // Bold and italic selected with their markers: italic comes off.
+        XCTAssertEqual(apply(both, MarkdownEditing.toggleInline(both, NSRange(location: 0, length: 7), marker: "*")), t)
+    }
+
     func testInsertBlockUsesTheDocumentsLineBreaks() {
         let t = "abc\r\ndef"
         let rule = MarkdownEditing.insertBlock(t, NSRange(location: 5, length: 0), "---", caretOffset: 3)

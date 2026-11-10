@@ -36,9 +36,12 @@ public enum MarkdownEditing {
             let outer = NSRange(location: sel.location - m, length: sel.length + 2 * m)
             return Edit(range: outer, text: ns.substring(with: sel), selection: NSRange(location: outer.location, length: sel.length))
         }
-        // Selection itself includes the markers: unwrap.
+        // Selection itself includes the markers: unwrap. ("**bold**" starts and
+        // ends with a star too, but those are bold's: italic wraps it.)
         let selected = ns.substring(with: sel)
-        if sel.length >= 2 * m, selected.hasPrefix(marker), selected.hasSuffix(marker) {
+        let boldOnly = marker == "*" && selected.hasPrefix("**") && selected.hasSuffix("**")
+            && !(selected.hasPrefix("***") && selected.hasSuffix("***"))
+        if sel.length >= 2 * m, selected.hasPrefix(marker), selected.hasSuffix(marker), !boldOnly {
             let inner = String(selected.dropFirst(marker.count).dropLast(marker.count))
             return Edit(range: sel, text: inner, selection: NSRange(location: sel.location, length: (inner as NSString).length))
         }
