@@ -974,6 +974,8 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
                 guard let tabURL = tab.url?.standardizedFileURL else { continue }
                 if tabURL.path == oldPath {
                     tab.url = target.standardizedFileURL
+                    // A name the user typed stays, even one starting with "Untitled".
+                    tab.autoName = false
                 } else if tabURL.path.hasPrefix(oldPath + "/") {
                     tab.url = URL(fileURLWithPath: target.standardizedFileURL.path + tabURL.path.dropFirst(oldPath.count))
                 } else { continue }
