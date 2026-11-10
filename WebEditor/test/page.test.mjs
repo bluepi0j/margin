@@ -22,6 +22,14 @@ test('page reports ready', () => {
   assert.ok(messages.some(m => m.type === 'ready'))
 })
 
+test('word count: punctuation on its own is not a word', async () => {
+  const { countWords } = await import('./.build/page.mjs')
+  assert.equal(countWords("Hello, world! It's well-known."), 4)
+  assert.equal(countWords('a - b -- c'), 3)
+  assert.equal(countWords('- one\n- two\n\n---\n'), 2)
+  assert.equal(countWords('中文字数 test'), 5)
+})
+
 test('heading level zero turns a heading into a paragraph', () => {
   margin.open('paragraph', '## Heading\n', '', true)
   margin.command('heading', { level: 0 })

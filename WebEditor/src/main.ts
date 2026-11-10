@@ -191,7 +191,9 @@ function postOutline() {
 /** Words for Latin text, plus one per CJK character (how CJK counts are usually given). */
 export function countWords(text: string) {
   const cjk = text.match(/[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]/g)?.length ?? 0
-  const latin = text.replace(/[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]/g, ' ').match(/[\p{L}\p{N}'’-]+/gu)?.length ?? 0
+  // A word starts with a letter or a digit: a dash on its own ("a - b", a
+  // list marker in source mode) isn't one.
+  const latin = text.replace(/[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]/g, ' ').match(/[\p{L}\p{N}][\p{L}\p{N}'’-]*/gu)?.length ?? 0
   return cjk + latin
 }
 
