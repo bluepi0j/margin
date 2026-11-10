@@ -108,6 +108,21 @@ test('the restore button restores its own change', () => {
   assert.equal(markdown(ed), 'A1\n\nB\n\nC\n')
 })
 
+test('two changes at the same place each restore their own', () => {
+  // A removed paragraph right before a rewritten one: both changes sit at
+  // the rewritten paragraph's position.
+  const base = 'Gone paragraph here.\n\nThe quick brown fox jumps.\n\nEnd.\n'
+  const ed = withDiff(base, 'The quick red fox jumps.\n\nEnd.\n')
+  const hunks = core.diffHunks(ed.state)
+  assert.deepEqual(hunks.map(h => [h.old.length, h.added.length]), [[1, 0], [1, 1]])
+  assert.equal(hunks[0].from, hunks[1].from)
+  const buttons = ed.view.dom.querySelectorAll('.diff-restore')
+  assert.equal(buttons.length, 2)
+  // The second button belongs to the rewrite, not to the removed paragraph.
+  buttons[1].dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+  assert.equal(markdown(ed), 'The quick brown fox jumps.\n\nEnd.\n')
+})
+
 test('edits are re-diffed after a pause, and clearing the base removes the marks', async () => {
   const ed = withDiff('A\n\nB\n', 'A\n\nB\n')
   assert.equal(core.diffHunks(ed.state).length, 0)

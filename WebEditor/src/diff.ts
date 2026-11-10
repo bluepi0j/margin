@@ -383,8 +383,8 @@ function build(doc: PMNode, base: PMNode, schema: Schema): DiffState {
   const hunks = computeHunks(doc, base)
   const decos: Decoration[] = []
   for (const h of hunks) {
-    const id = hash(h.old.map(key).join('\u0000')) + '-' + h.added.length + '-' + (h.list ?? '')
-    decos.push(Decoration.widget(h.from, (view, getPos) => control(view, getPos, h), {
+    const id = hunkId(h)
+    decos.push(Decoration.widget(h.from, (view, getPos) => control(view, getPos, id, h), {
       side: -2, key: `diff-control-${id}`, ignoreSelection: true, stopEvent: () => true,
     }))
     if (h.old.length) {
@@ -397,6 +397,11 @@ function build(doc: PMNode, base: PMNode, schema: Schema): DiffState {
     for (const r of h.addedWords) if (r.to > r.from) decos.push(Decoration.inline(r.from, r.to, { class: 'diff-word-added' }))
   }
   return { base, hunks, decorations: DecorationSet.create(doc, decos), fresh: true }
+}
+
+/** What a change is (what it removed, how many blocks it added, in what list), wherever it sits. */
+function hunkId(h: Hunk) {
+  return hash(h.old.map(key).join('\u0000')) + '-' + h.added.length + '-' + (h.list ?? '')
 }
 
 function hash(s: string) {
@@ -469,7 +474,7 @@ function wrapRange(nodes: Text[], start: number, end: number) {
 }
 
 /** The "restore" button at the top right of a change. */
-function control(view: EditorView, getPos: () => number | undefined, h: Hunk): HTMLElement {
+function control(view: EditorView, getPos: () => number | undefined, id: string, h: Hunk): HTMLElement {
   const anchor = document.createElement('div')
   anchor.className = 'diff-control'
   anchor.contentEditable = 'false'
@@ -484,8 +489,10 @@ function control(view: EditorView, getPos: () => number | undefined, h: Hunk): H
   button.addEventListener('click', e => {
     e.preventDefault()
     // Look the change up where the button is now: edits may have moved it.
+    // A removed block and a rewrite of the block after it start at the same
+    // position, so the place alone doesn't say which change this button is for.
     const pos = getPos()
-    const index = diffHunks(view.state).findIndex(x => x.from === pos)
+    const index = diffHunks(view.state).findIndex(x => x.from === pos && hunkId(x) === id)
     const tr = index < 0 ? null : revertHunk(view.state, index)
     if (tr) { view.dispatch(tr); view.focus() }
   })
