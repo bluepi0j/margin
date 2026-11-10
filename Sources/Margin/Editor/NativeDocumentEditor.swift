@@ -810,9 +810,18 @@ final class NativeDocumentEditor: DocumentEditor {
         tv.scrollRangeToVisible(range)
     }
 
-    func reveal(_ text: String) {
+    func reveal(_ text: String, line: Int) {
         guard let tv = textView else { return }
-        let range = (tv.string as NSString).range(of: text, options: [.caseInsensitive, .diacriticInsensitive])
+        let ns = tv.string as NSString
+        let options: NSString.CompareOptions = [.caseInsensitive, .diacriticInsensitive]
+        // From the result's line on; the text may have changed since the
+        // search, so anywhere is better than nowhere.
+        var start = 0
+        for _ in 1..<max(1, line) where start < ns.length {
+            start = NSMaxRange(ns.lineRange(for: NSRange(location: start, length: 0)))
+        }
+        var range = ns.range(of: text, options: options, range: NSRange(location: start, length: ns.length - start))
+        if range.location == NSNotFound { range = ns.range(of: text, options: options) }
         guard range.location != NSNotFound else { return }
         tv.window?.makeFirstResponder(tv)
         tv.setSelectedRange(range)

@@ -31,8 +31,10 @@ protocol DocumentEditor: AnyObject {
     func applySettings()
     func focus()
     func goToHeading(_ index: Int)
-    /// Shows the first occurrence of `text` (project search results).
-    func reveal(_ text: String)
+    /// Shows the occurrence of `text` on line `line` of the file (1-based: a
+    /// project search result). When that line hasn't got it any more, the
+    /// next one after it, else the first.
+    func reveal(_ text: String, line: Int)
     /// Shows what changed since `base` (the committed text) in document `id`,
     /// or stops showing changes with nil. Answers with `.changes` events.
     func setDiffBase(id: String, base: String?)
@@ -81,7 +83,7 @@ final class WebDocumentEditor: DocumentEditor {
     func applySettings() { webView.call("settings", ["s": Preferences.shared.editorSettings]) }
     func focus() { webView.call("focus") }
     func goToHeading(_ index: Int) { webView.call("goToHeading", ["index": index]) }
-    func reveal(_ text: String) { webView.call("reveal", ["query": text]) }
+    func reveal(_ text: String, line: Int) { webView.call("reveal", ["query": text, "line": line]) }
     func setDiffBase(id: String, base: String?) { webView.call("setDiffBase", ["id": id, "markdown": base.map { $0 as Any } ?? NSNull()]) }
 
     /// Keeps the right-click table items in sync with the caret.

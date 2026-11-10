@@ -264,6 +264,6 @@ private final class TestEditor: DocumentEditor {
     func applySettings() {}
     func focus() {}
     func goToHeading(_ index: Int) {}
-    func reveal(_ text: String) {}
+    func reveal(_ text: String, line: Int) {}
     func setDiffBase(id: String, base: String?) {}
 }

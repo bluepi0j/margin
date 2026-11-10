@@ -62,6 +62,32 @@ test('find and replace keeps positions after Unicode case expansion', () => {
   margin.close('unicode-find')
 })
 
+test('a search result opens at the match on its line', () => {
+  margin.open('reveal-line', '# Notes\n\nfirst target here\n\n- item\n- another target\n\nlast target\n', '', true)
+  const shown = () => {
+    const { state } = editor()
+    assert.equal(state.doc.textBetween(state.selection.from, state.selection.to), 'target')
+    return state.selection.$from.parent.textContent
+  }
+  margin.reveal('target', 6)
+  assert.equal(shown(), 'another target')
+  margin.reveal('target', 8)
+  assert.equal(shown(), 'last target')
+  margin.reveal('target', 3)
+  assert.equal(shown(), 'first target here')
+  // Nothing from that line on (the file changed since the search): the first match.
+  margin.reveal('target', 40)
+  assert.equal(shown(), 'first target here')
+  // Source mode searches the text itself from that line.
+  margin.setSourceMode(true)
+  margin.reveal('TARGET', 6)
+  const source = document.getElementById('source')
+  assert.equal(source.value.slice(0, source.selectionStart).split('\n').length, 6)
+  margin.setSourceMode(false)
+  document.querySelector('[data-act="close"]').click()
+  margin.close('reveal-line')
+})
+
 test('command-F opens the page find bar before WebKit handles it', () => {
   margin.open('keyboard-find', 'Alpha beta\n', '', true)
   const event = new window.KeyboardEvent('keydown', {

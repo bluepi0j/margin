@@ -188,6 +188,17 @@ function postOutline() {
   rail.rebuild()
 }
 
+/** Where line `line` (1-based) starts in `text`; the last line's start when there are fewer. */
+function lineOffset(text: string, line: number) {
+  let at = 0
+  for (let i = 1; i < line; i++) {
+    const next = text.indexOf('\n', at)
+    if (next < 0) break
+    at = next + 1
+  }
+  return at
+}
+
 /** Words for Latin text, plus one per CJK character (how CJK counts are usually given). */
 export function countWords(text: string) {
   const cjk = text.match(/[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]/g)?.length ?? 0
@@ -650,17 +661,29 @@ const api = {
     else editor.commands.focus()
   },
 
-  /** Opens the find bar with `query` (used by project search results). */
-  reveal(query: string) {
+  /**
+   * Opens the find bar with `query` at its match on line `line` of the file
+   * (1-based: a project search result), or the next one after that line.
+   */
+  reveal(query: string, line = 1) {
     if (sourceMode) {
-      const i = sourceArea.value.toLowerCase().indexOf(query.toLowerCase())
+      const text = sourceArea.value.toLowerCase()
+      let i = text.indexOf(query.toLowerCase(), lineOffset(text, line))
+      if (i < 0) i = text.indexOf(query.toLowerCase())
       if (i >= 0) {
         sourceArea.focus()
         sourceArea.setSelectionRange(i, i + query.length)
       }
       return
     }
-    findBar.open(false, query)
+    // The search read the file: find its line in the Markdown the document
+    // came from, then where that is in the document.
+    const doc = active()
+    const pm = editor.state.doc
+    const from = doc && line > 1
+      ? docPosition(pm, blockOffsets(editor, pm, doc.markdown), doc.markdown, lineOffset(doc.markdown, line))
+      : undefined
+    findBar.open(false, query, from)
   },
 
   /** The active document as a standalone HTML page body (rendered math, diagrams). */

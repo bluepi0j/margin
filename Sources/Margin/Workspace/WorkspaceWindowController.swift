@@ -922,7 +922,7 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
                 self.openFile(match.url)
                 let query = self.workspace.searchQuery
                 // Give a newly opened tab a moment to load before searching it.
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { self.editor.reveal(query) }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { self.editor.reveal(query, line: match.line) }
             }
         )
     }

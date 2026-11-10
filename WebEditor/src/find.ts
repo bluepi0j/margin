@@ -155,7 +155,8 @@ export class FindBar {
     return !this.el.hidden
   }
 
-  open(withReplace = false, query?: string) {
+  /** `startAt`: begin at the first match from that position on, not the first in the document. */
+  open(withReplace = false, query?: string, startAt?: number) {
     const editor = this.getEditor()
     const { from, to } = editor.state.selection
     const selected = from !== to ? editor.state.doc.textBetween(from, to, ' ') : ''
@@ -164,6 +165,13 @@ export class FindBar {
     this.el.hidden = false
     if (withReplace) this.replaceRow.hidden = false
     this.setQuery(this.input.value, 0)
+    if (startAt !== undefined) {
+      const index = (findState(editor.state)?.matches ?? []).findIndex(m => m.from >= startAt)
+      if (index > 0) {
+        this.dispatch({ index })
+        this.reveal()
+      }
+    }
     this.input.focus()
     this.input.select()
   }
