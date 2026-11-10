@@ -19,7 +19,8 @@ final class NativeEnlargeDiagramTests: XCTestCase {
         let text = "Intro\n\n```mermaid\ngraph LR\n  A[Idea] --> B[Draft]\n```\n\nAfter\n\n```mermaid\ngraph TD\n  X --> Y\n```\n"
         editor.open(id: "enlarge-test", markdown: text, documentURL: nil, activate: true)
         host.layoutSubtreeIfNeeded()
-        try await Task.sleep(for: .milliseconds(250))
+        // The diagram buttons come with the outline, 0.25 s after the text: wait well past it.
+        try await Task.sleep(for: .milliseconds(700))
         let tv = try XCTUnwrap(editor.focusView as? NSTextView)
         // Outside a diagram there is nothing to enlarge.
         tv.setSelectedRange(NSRange(location: 2, length: 0))
