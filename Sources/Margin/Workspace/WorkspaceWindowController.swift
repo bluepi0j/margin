@@ -246,7 +246,7 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
                     return false
                 }
             }
-            try TextFile.write(text, to: url)
+            try TextFile.write(text, to: url, encoding: tab.encoding)
             tab.diskText = text
             tab.unsavedText = nil
             tab.saveError = nil
@@ -284,15 +284,16 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
             if activate { select(existing.id) }
             return
         }
-        let text: String
+        let file: TextFile.Snapshot
         do {
-            text = try TextFile.read(url).text
+            file = try TextFile.read(url)
         } catch {
             showError(error)
             return
         }
-        let tab = Tab(url: url.standardizedFileURL, diskText: text)
-        insert(tab, markdown: text, activate: activate)
+        let tab = Tab(url: url.standardizedFileURL, diskText: file.text)
+        tab.encoding = file.encoding
+        insert(tab, markdown: file.text, activate: activate)
         NSDocumentController.shared.noteNewRecentDocumentURL(url)
         rewatch()
     }
@@ -559,6 +560,7 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
         tab.url = url.standardizedFileURL
         tab.untitledName = nil
         tab.diskText = text
+        tab.encoding = .utf8
         tab.unsavedText = nil
         tab.isMissing = false
         tab.hasConflict = false
@@ -590,8 +592,10 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func reloadFromDisk(_ id: String) {
-        guard let tab = workspace.tab(id: id), let url = tab.url, let text = try? TextFile.read(url).text else { return }
+        guard let tab = workspace.tab(id: id), let url = tab.url, let file = try? TextFile.read(url) else { return }
+        let text = file.text
         tab.diskText = text
+        tab.encoding = file.encoding
         tab.unsavedText = nil
         tab.hasConflict = false
         tab.isEditing = false
@@ -638,9 +642,13 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
                 continue
             }
             tab.isMissing = false
-            guard let text = try? TextFile.read(url).text, text != tab.diskText else { continue }
+            guard let file = try? TextFile.read(url) else { continue }
+            let text = file.text
+            // The same text in another encoding (converted by another program) is still news.
+            guard text != tab.diskText else { tab.encoding = file.encoding; continue }
             if tab.unsavedText == nil, !tab.isEditing {
                 tab.diskText = text
+                tab.encoding = file.encoding
                 editor.reload(id: tab.id, markdown: text)
             } else if text != tab.unsavedText {
                 tab.hasConflict = true

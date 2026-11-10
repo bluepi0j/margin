@@ -55,6 +55,31 @@ final class WorkspaceTests: XCTestCase {
         XCTAssertEqual(try TextFile.read(file).text, "my edit")
     }
 
+    func testEditingAFileThatIsNotUTF8KeepsItsOtherBytes() async throws {
+        _ = NSApplication.shared
+        let previous = Preferences.shared.autosave
+        Preferences.shared.autosave = true
+        defer { Preferences.shared.autosave = previous }
+        // "中文" in GBK. It opens as Latin-1 text; autosave must not turn those bytes into UTF-8.
+        let gbk: [UInt8] = [0xD6, 0xD0, 0xCE, 0xC4, 0x0A]
+        let file = try temporaryFolder().appendingPathComponent("gbk.txt")
+        try Data(gbk).write(to: file)
+        let editor = TestEditor()
+        let controller = WorkspaceWindowController(folder: nil, editor: editor)
+        controller.openFile(file)
+        let tab = try XCTUnwrap(controller.workspace.activeTab)
+        let opened = try XCTUnwrap(tab.diskText)
+        editor.edits[tab.id] = opened + "x"
+        await controller.flushEditor()
+        XCTAssertEqual(try Data(contentsOf: file), Data(gbk + [0x78]))
+        // Characters that encoding can't hold: reported, nothing written.
+        editor.edits[tab.id] = opened + "中"
+        await controller.flushEditor()
+        XCTAssertNotNil(tab.saveError)
+        XCTAssertEqual(tab.unsavedText, opened + "中")
+        XCTAssertEqual(try Data(contentsOf: file), Data(gbk + [0x78]))
+    }
+
     func testPendingNewFileIsNamedAfterBackgroundContentArrives() async throws {
         _ = NSApplication.shared
         let previous = Preferences.shared.autosave

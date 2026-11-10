@@ -14,6 +14,8 @@ final class Tab: Identifiable {
     var unsavedText: String?
     /// The text we believe is on disk (to ignore our own writes in the watcher).
     var diskText: String?
+    /// The file's text encoding, kept when saving (see `TextFile.write`).
+    var encoding: String.Encoding = .utf8
     /// The file vanished from disk while open.
     var isMissing = false
     /// The file changed on disk while this tab had unsaved edits.

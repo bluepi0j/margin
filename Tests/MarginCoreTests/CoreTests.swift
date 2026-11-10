@@ -157,6 +157,32 @@ final class FileTests: XCTestCase {
         XCTAssertEqual(try TextFile.read(url).text, "# 你好\n")
     }
 
+    func testSavingAFileThatIsNotUTF8KeepsItsOtherBytes() throws {
+        // "中文" in GBK: not UTF-8, so it reads as Latin-1 (and shows as "ÖÐÎÄ").
+        let gbk: [UInt8] = [0xD6, 0xD0, 0xCE, 0xC4, 0x0A]
+        let url = dir.appendingPathComponent("gbk.txt")
+        try Data(gbk).write(to: url)
+        let file = try TextFile.read(url)
+        XCTAssertEqual(file.encoding, .isoLatin1)
+        try TextFile.write(file.text + "ok\n", to: url, encoding: file.encoding)
+        XCTAssertEqual(try Data(contentsOf: url), Data(gbk + Array("ok\n".utf8)))
+        // Text that encoding can't hold is refused, and the file left alone.
+        XCTAssertThrowsError(try TextFile.write(file.text + "中", to: url, encoding: file.encoding))
+        XCTAssertEqual(try Data(contentsOf: url), Data(gbk + Array("ok\n".utf8)))
+    }
+
+    func testSavingUTF16KeepsItsByteOrder() throws {
+        for (encoding, bom) in [(String.Encoding.utf16BigEndian, [0xFE, 0xFF] as [UInt8]), (.utf16LittleEndian, [0xFF, 0xFE])] {
+            let url = dir.appendingPathComponent("utf16-\(bom[0]).md")
+            try (Data(bom) + XCTUnwrap("# 你好\n".data(using: encoding))).write(to: url)
+            let file = try TextFile.read(url)
+            XCTAssertEqual(file.text, "# 你好\n")
+            XCTAssertEqual(file.encoding, encoding)
+            try TextFile.write("# 你好!\n", to: url, encoding: file.encoding)
+            XCTAssertEqual(try Data(contentsOf: url), try Data(bom) + XCTUnwrap("# 你好!\n".data(using: encoding)))
+        }
+    }
+
     func testWritingThroughSymlinkKeepsTheLinkAndUpdatesItsTarget() throws {
         let target = dir.appendingPathComponent("target.md")
         let link = dir.appendingPathComponent("link.md")
