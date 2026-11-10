@@ -19,7 +19,7 @@
 - **Edit the rendered page.** Type `# ` for a heading, `- ` for a list, ` ``` ` for code — or use the format bar.
 - **A folder per window, files as tabs**, like VS Code. Quick open with ⌘P, search the whole folder with ⇧⌘F.
 - **Saves as you type.** When another program (an AI agent, say) changes the file, it reloads in place and your cursor stays put.
-- **Tables, math, code, diagrams**: GitHub-style tables, KaTeX formulas, syntax highlighting, and Mermaid diagrams drawn right in the page.
+- **Tables, math, code, diagrams**: GitHub-style tables, KaTeX formulas, syntax highlighting, and Mermaid diagrams drawn right in the page. A big diagram opens in its own window to zoom, copy, or save as PNG.
 - **An outline rail** beside the text — hover to preview a section, click to jump.
 - **Two editors**, switchable in Settings: *Web* (true what-you-see-is-what-you-get) and *Native* (TextKit 2, about half the memory).
 - **Export** to HTML or PDF, and print.
