@@ -14,6 +14,14 @@ final class MarkdownDiffTests: XCTestCase {
         ])
     }
 
+    func testARuleOnTheFirstLineIsNotFrontMatterWithoutAClosingFence() {
+        // No second "---": the first line is a rule, the rest ordinary blocks.
+        XCTAssertEqual(contents("---\n\n# Title\n\nPara\n\n- a\n"), ["---", "# Title", "Para", "- a"])
+        // So an edit further down is one change, not the whole document.
+        let hunks = MarkdownDiff.compute(base: "---\n\n# Title\n\nPara one\n\nEnd\n", current: "---\n\n# Title\n\nPara two\n\nEnd\n")
+        XCTAssertEqual(hunks.map(\.removedText), ["Para one"])
+    }
+
     func testSegmentsTileTheText() {
         let text = "\n\n# A\n\ntext\n\n\n- x\n- y\n"
         let blocks = MarkdownDiff.blocks(in: text as NSString)

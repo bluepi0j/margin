@@ -69,6 +69,18 @@ public enum MarkdownDiff {
             start = -1
         }
 
+        /// Whether a line from `from` on is a front matter fence.
+        func frontMatterCloses(after from: Int) -> Bool {
+            var lineStart = from
+            while lineStart < length {
+                var lineEnd = lineStart
+                while lineEnd < length, units[lineEnd] != 0x0A { lineEnd += 1 }
+                if Line(units: units, start: lineStart, end: lineEnd).isFrontMatterFence { return true }
+                lineStart = lineEnd + 1
+            }
+            return false
+        }
+
         while lineStart < length {
             var lineEnd = lineStart
             while lineEnd < length, units[lineEnd] != 0x0A { lineEnd += 1 }
@@ -93,7 +105,9 @@ public enum MarkdownDiff {
             }
             if line.isBlank { close(); continue }
 
-            if lineIndex == 0, line.isFrontMatterFence {
+            // Front matter needs its closing fence. Without one the first line
+            // is a rule, and the rest is ordinary Markdown, not one big block.
+            if lineIndex == 0, line.isFrontMatterFence, frontMatterCloses(after: next) {
                 start = lineStart; end = lineEnd; inFrontMatter = true
                 continue
             }
