@@ -216,6 +216,16 @@ final class CodeFenceTests: XCTestCase {
 
 final class FencedBlockTests: XCTestCase {
     /// The precomputed blocks answer exactly like the scan, caret by caret.
+    func testCodeInsideAFencedBlock() {
+        let text = "Intro\n\n```mermaid\ngraph LR\n  A --> B\n```\n\n~~~\nopen\nto the end"
+        let blocks = MarkdownEditing.fencedBlocks(in: text)
+        XCTAssertEqual(blocks.map { MarkdownEditing.code(in: $0, of: text) }, ["graph LR\n  A --> B", "open\nto the end"])
+        let crlf = "```mermaid\r\ngraph LR\r\n```\r\n"
+        XCTAssertEqual(MarkdownEditing.code(in: MarkdownEditing.fencedBlocks(in: crlf)[0], of: crlf), "graph LR")
+        let empty = "```mermaid\n```\n"
+        XCTAssertEqual(MarkdownEditing.code(in: MarkdownEditing.fencedBlocks(in: empty)[0], of: empty), "")
+    }
+
     func testFencedBlocksMatchTheScan() {
         let samples = [
             "a\n```js\ncode\n```\nb\n",

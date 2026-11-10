@@ -19,6 +19,8 @@ enum EditorEvent {
     /// How many changes since the last commit the shown document has, or nil
     /// when it isn't showing changes.
     case changes(id: String, count: Int?)
+    /// The user asked to see a Mermaid diagram on its own, enlarged.
+    case openDiagram(code: String)
 }
 
 struct OutlineItem: Identifiable, Equatable {
@@ -195,6 +197,8 @@ final class EditorWebView: WKWebView {
             if let text = msg["text"] as? String { onEvent?(.copy(text)) }
         case "pickImage":
             onEvent?(.pickImage)
+        case "openDiagram":
+            if let code = msg["code"] as? String { onEvent?(.openDiagram(code: code)) }
         case "changes":
             if let id = msg["id"] as? String, let count = msg["count"] as? Int {
                 onEvent?(.changes(id: id, count: count < 0 ? nil : count))

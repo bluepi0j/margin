@@ -214,6 +214,11 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate {
             workspace.wordCount = words
         case .changes(let id, let count):
             if id == workspace.activeTabID, workspace.changeCount != count { workspace.changeCount = count }
+        case .openDiagram(let code):
+            let tab = workspace.activeTab
+            let name = tab?.url.map { $0.deletingPathExtension().lastPathComponent } ?? tab?.displayName ?? "Untitled"
+            DiagramViewer.shared.show(code: code, name: "\(name) diagram",
+                                      directory: tab?.url?.deletingLastPathComponent() ?? workspace.folder, from: window)
         }
     }
 

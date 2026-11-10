@@ -273,6 +273,22 @@ public enum MarkdownEditing {
         return blocks
     }
 
+    /// The code inside `block` of `text`: the lines between its fences.
+    public static func code(in block: FencedBlock, of text: String) -> String {
+        let ns = text as NSString
+        let start = min(NSMaxRange(ns.lineRange(for: block.fence.openingLine)), block.end)
+        // A closed block ends with its closing fence line; one still open runs to the end.
+        var end = block.end
+        let last = ns.lineRange(for: NSRange(location: block.end, length: 0)).location
+        if last >= start {
+            let line = ns.substring(with: NSRange(location: last, length: block.end - last)).trimmingCharacters(in: .whitespaces)
+            if line.count >= 3, let mark = line.first, mark == "`" || mark == "~", line.allSatisfy({ $0 == mark }) { end = last }
+        }
+        var code = ns.substring(with: NSRange(location: start, length: end - start))
+        if code.last?.isNewline == true { code.removeLast() }   // ("\r\n" is one Character)
+        return code
+    }
+
     /// `codeFence(containing:in:)` against blocks from `fencedBlocks(in:)`.
     public static func codeFence(containing caret: Int, in blocks: [FencedBlock]) -> CodeFence? {
         var lo = 0, hi = blocks.count

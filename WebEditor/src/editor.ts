@@ -340,7 +340,19 @@ const MarginCodeBlock = CodeBlockLowlight.extend({
         setEditing(!dom.classList.contains('editing'))
       })
 
-      header.append(toggle, lang, copy)
+      // A diagram is at most as wide as the text: a big one gets small. This
+      // opens it in the app's diagram window, to zoom, copy or save as a picture.
+      const enlarge = document.createElement('button')
+      enlarge.className = 'code-enlarge'
+      enlarge.textContent = 'Enlarge'
+      enlarge.title = 'Open the diagram in its own window'
+      enlarge.addEventListener('mousedown', e => {
+        e.preventDefault()
+        if (e.button !== 0) return
+        window.margin.post({ type: 'openDiagram', code: current.textContent })
+      })
+
+      header.append(toggle, enlarge, lang, copy)
       const pre = document.createElement('pre')
       const code = document.createElement('code')
       // Code is not prose: no spelling squiggles, and (since WebKit skips text
@@ -380,6 +392,7 @@ const MarginCodeBlock = CodeBlockLowlight.extend({
         dom.classList.toggle('has-lang', !!language)
         dom.classList.toggle('is-mermaid', isMermaid)
         toggle.hidden = !isMermaid
+        enlarge.hidden = !isMermaid || !current.textContent.trim()
         if (isMermaid) {
           if (!current.textContent.trim()) dom.classList.add('editing')
           toggle.textContent = dom.classList.contains('editing') ? 'Done' : 'Edit'

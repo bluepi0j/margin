@@ -88,6 +88,21 @@ test('a search result opens at the match on its line', () => {
   margin.close('reveal-line')
 })
 
+test('a diagram has a button that asks the app to enlarge it', () => {
+  margin.open('enlarge', '```mermaid\ngraph LR\n  A --> B\n```\n\n```js\nlet a = 1\n```\n', '', true)
+  const [diagram, code] = document.querySelectorAll('.code-block')
+  const press = block => block.querySelector('.code-enlarge').dispatchEvent(new window.MouseEvent('mousedown', { button: 0, bubbles: true }))
+  assert.equal(diagram.querySelector('.code-enlarge').hidden, false)
+  // Other code has nothing to enlarge.
+  assert.equal(code.querySelector('.code-enlarge').hidden, true)
+  messages.length = 0
+  press(diagram)
+  assert.deepEqual(messages.filter(m => m.type === 'openDiagram'), [{ type: 'openDiagram', code: 'graph LR\n  A --> B' }])
+  // Asking is not an edit.
+  assert.equal(messages.some(m => m.type === 'edited'), false)
+  margin.close('enlarge')
+})
+
 test('command-F opens the page find bar before WebKit handles it', () => {
   margin.open('keyboard-find', 'Alpha beta\n', '', true)
   const event = new window.KeyboardEvent('keydown', {

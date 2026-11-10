@@ -518,7 +518,8 @@ body.cmd-held .prose a {
   text-align: left;
 }
 
-.code-toggle[hidden] {
+.code-toggle[hidden],
+.code-enlarge[hidden] {
   display: none;
 }
 

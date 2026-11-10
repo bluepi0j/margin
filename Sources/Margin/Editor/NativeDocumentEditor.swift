@@ -51,6 +51,10 @@ final class NativeDocumentEditor: DocumentEditor {
     private var diffBases: [String: String] = [:]
     private var diffTimer: Timer?
     private var diffButtons: [NSButton] = []
+    /// The Mermaid blocks of the text as of the last pause in typing, and the
+    /// "enlarge" button over each one on screen.
+    private var diagramBlocks: [MarkdownEditing.FencedBlock] = []
+    private var diagramButtons: [NSButton] = []
     private var frameObserver: NSObjectProtocol?
     private var storageObserver: NSObjectProtocol?
     private var activeObserver: NSObjectProtocol?
@@ -202,6 +206,8 @@ final class NativeDocumentEditor: DocumentEditor {
             MainActor.assumeIsolated { _ = self?.flushNow() }
         }
         scheduleInfo()
+        // The diagrams may have moved; their buttons come back with the outline.
+        diagramButtons.forEach { $0.isHidden = true }
         findNeedsRefreshAfterDocumentChange = true
         // The marks already followed the edit (storage notification).
         if diff.isActive { scheduleDiff() }
@@ -265,7 +271,7 @@ final class NativeDocumentEditor: DocumentEditor {
                 if let scrollObserver { NotificationCenter.default.removeObserver(scrollObserver) }
                 scrollObserver = NotificationCenter.default.addObserver(
                     forName: NSView.boundsDidChangeNotification, object: clip, queue: .main
-                ) { [weak self] _ in MainActor.assumeIsolated { self?.trackRail(); self?.updateBlockChip(); self?.scrolledWithDiff() } }
+                ) { [weak self] _ in MainActor.assumeIsolated { self?.trackRail(); self?.updateBlockChip(); self?.scrolledWithDiff(); self?.updateDiagramButtons() } }
             }
             diff.textView = found
             if let storageObserver { NotificationCenter.default.removeObserver(storageObserver) }
@@ -327,6 +333,7 @@ final class NativeDocumentEditor: DocumentEditor {
         )
         blockChipContext = context
         updateBlockChip(context)
+        updateDiagramButtons()
     }
 
     // MARK: Code block and table labels
@@ -684,6 +691,62 @@ final class NativeDocumentEditor: DocumentEditor {
         return true
     }
 
+    /// Opens the Mermaid block the caret is in in the diagram window.
+    func enlargeDiagram() {
+        guard let tv = textView else { return }
+        let text = tv.string, caret = tv.selectedRange().location
+        guard let block = blocks(of: text).last(where: { $0.fence.openingLine.location <= caret && caret <= $0.end }) else { return }
+        onEvent?(.openDiagram(code: MarkdownEditing.code(in: block, of: text)))
+    }
+
+    /// An "enlarge" button at the top right of each diagram on screen. Like
+    /// the restore buttons they live in the scroll view, over the text. The
+    /// diagram the caret is in shows its source, and has the label beside
+    /// its language instead.
+    private func updateDiagramButtons() {
+        guard let tv = textView, let scrollView = tv.enclosingScrollView, let container = tv.textContainer,
+              model.documentId != nil, !model.rawSource, !diagramBlocks.isEmpty else {
+            diagramButtons.forEach { $0.isHidden = true }
+            return
+        }
+        let visible = tv.visibleRect
+        let caret = tv.selectedRange().location
+        let length = (tv.textStorage?.length ?? 0)
+        var used = 0
+        for (index, block) in diagramBlocks.enumerated() {
+            let start = block.fence.openingLine.location
+            guard start < length, !(start <= caret && caret <= block.end),
+                  let y = laidOutYOffset(of: start, in: tv), y + 6 >= visible.minY, y + 30 <= visible.maxY else { continue }
+            let button: NSButton
+            if used < diagramButtons.count {
+                button = diagramButtons[used]
+            } else {
+                button = NSButton(title: "", target: self, action: #selector(enlargeFromButton(_:)))
+                button.bezelStyle = .circular
+                button.isBordered = true
+                button.controlSize = .small
+                button.image = NSImage(systemSymbolName: "arrow.up.left.and.arrow.down.right", accessibilityDescription: "Enlarge")
+                button.imagePosition = .imageOnly
+                button.alphaValue = 0.6
+                button.toolTip = "Open the diagram in its own window"
+                button.setAccessibilityLabel("Enlarge the diagram")
+                scrollView.addSubview(button, positioned: .above, relativeTo: scrollView.contentView)
+                diagramButtons.append(button)
+            }
+            used += 1
+            button.tag = index
+            let x = tv.textContainerOrigin.x + container.size.width - 38
+            button.frame = scrollView.convert(CGRect(x: x, y: y + 6, width: 22, height: 22), from: tv)
+            button.isHidden = false
+        }
+        for button in diagramButtons[used...] { button.isHidden = true }
+    }
+
+    @objc private func enlargeFromButton(_ sender: NSButton) {
+        guard let tv = textView, diagramBlocks.indices.contains(sender.tag) else { return }
+        onEvent?(.openDiagram(code: MarkdownEditing.code(in: diagramBlocks[sender.tag], of: tv.string)))
+    }
+
     fileprivate func setCodeLanguage(_ language: String) {
         guard let tv = textView, let fence = MarkdownEditing.codeFence(containing: tv.selectedRange().location, in: tv.string) else { return }
         let edit = MarkdownEditing.setLanguage(language, of: fence)
@@ -909,6 +972,7 @@ final class NativeDocumentEditor: DocumentEditor {
             }
         }
         updateDiffButtons()
+        updateDiagramButtons()
     }
 
     /// One "restore" button beside each change on screen. They live in the
@@ -1006,6 +1070,8 @@ final class NativeDocumentEditor: DocumentEditor {
         onEvent?(.outline(items, words: words))
         updateRail(text, headings: headings)
         updateBlockChip()
+        diagramBlocks = MarkdownEditing.fencedBlocks(in: text).filter { $0.fence.language.lowercased() == "mermaid" }
+        updateDiagramButtons()
         if findNeedsRefreshAfterDocumentChange {
             findNeedsRefreshAfterDocumentChange = false
             refreshFindAfterDocumentChange()
@@ -1184,7 +1250,18 @@ private struct NativeEditorView: View {
             if let chip = model.blockChip {
                 Group {
                     switch chip.kind {
-                    case .code(let language): CodeLanguageMenu(language: language) { editor.setCodeLanguage($0) }
+                    case .code(let language):
+                        HStack(spacing: 4) {
+                            // The picture is at most as wide as the text: a big diagram gets small.
+                            if language.lowercased() == "mermaid" {
+                                Button { editor.enlargeDiagram() } label: {
+                                    ChipLabel(text: "Enlarge", symbol: "arrow.up.left.and.arrow.down.right", menu: false)
+                                }
+                                .buttonStyle(.plain)
+                                .help("Open the diagram in its own window")
+                            }
+                            CodeLanguageMenu(language: language) { editor.setCodeLanguage($0) }
+                        }
                     case .table: TableMenu { editor.editTable($0) }
                     }
                 }
@@ -1272,13 +1349,15 @@ private struct TableMenu: View {
 private struct ChipLabel: View {
     let text: String
     var symbol: String?
+    /// Opens a menu (the chevron); false for a plain button.
+    var menu = true
     @State private var hovering = false
 
     var body: some View {
         HStack(spacing: 3) {
             if let symbol { Image(systemName: symbol).font(.system(size: 10)) }
             Text(text)
-            Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold))
+            if menu { Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold)) }
         }
         .font(.system(size: 11, weight: .medium))
         .foregroundStyle(.secondary)

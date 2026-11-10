@@ -80,6 +80,21 @@ final class WorkspaceTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: file), Data(gbk + [0x78]))
     }
 
+    func testAnEditorAskingToEnlargeADiagramOpensTheDiagramWindow() throws {
+        _ = NSApplication.shared
+        let file = try temporaryFolder().appendingPathComponent("plan.md")
+        try TextFile.write("# Plan\n", to: file)
+        let editor = TestEditor()
+        let controller = WorkspaceWindowController(folder: nil, editor: editor)
+        controller.openFile(file)
+        let viewer = DiagramViewer.shared
+        defer { viewer.window?.close() }
+        editor.onEvent?(.openDiagram(code: "graph LR\n  A --> B"))
+        XCTAssertEqual(viewer.window?.isVisible, true)
+        XCTAssertFalse(viewer.canvas.isHidden)
+        XCTAssertGreaterThan(viewer.canvas.frame.width, DiagramCanvas.margin * 2)
+    }
+
     func testPendingNewFileIsNamedAfterBackgroundContentArrives() async throws {
         _ = NSApplication.shared
         let previous = Preferences.shared.autosave
