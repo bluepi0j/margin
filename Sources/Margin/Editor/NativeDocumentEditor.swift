@@ -262,11 +262,14 @@ final class NativeDocumentEditor: DocumentEditor {
             ) { [weak self] note in
                 guard let storage = note.object as? NSTextStorage, storage.editedMask.contains(.editedCharacters) else { return }
                 let range = storage.editedRange, delta = storage.changeInLength, length = storage.length
+                // The whole text put in at once (another tab, a reload, a full
+                // restyle) is not an edit to follow: the marks are computed for
+                // the new text, and mapping them would stretch each over all of it.
+                guard range.location != 0 || range.length != length else { return }
                 MainActor.assumeIsolated { self?.diff.storageEdited(range, delta: delta, newLength: length) }
             }
             found.postsFrameChangedNotifications = true
             if let frameObserver { NotificationCenter.default.removeObserver(frameObserver) }
-        if let storageObserver { NotificationCenter.default.removeObserver(storageObserver) }
             frameObserver = NotificationCenter.default.addObserver(
                 forName: NSView.frameDidChangeNotification, object: found, queue: .main
             ) { [weak self] _ in MainActor.assumeIsolated { self?.textViewResized() } }
